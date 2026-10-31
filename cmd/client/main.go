@@ -1,7 +1,7 @@
 package main
 
-import "github.com/ben-anass/DouzTach/client/terminal"
+import "github.com/ben-anass/DouzTach/client/commands"
 
 func main() {
-	terminal.PrintBanner()
+	commands.Execute()
 }
