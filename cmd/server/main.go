@@ -5,6 +5,9 @@ import (
 	"log"
 	"net/http"
 
+	"os"
+
+	"github.com/ben-anass/DouzTach/internal/auth"
 	"github.com/joho/godotenv"
 
 	"github.com/ben-anass/DouzTach/internal/database"
@@ -38,8 +41,16 @@ func main() {
 	// Initialize user service
 	userService := users.NewService(queries)
 
+	// Initialize JWT service
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatal("JWT_SECRET is required")
+	}
+
+	jwtService := auth.NewJWTService(jwtSecret)
+
 	// Initialize authentication handler
-	authHandler := handlers.NewAuthHandler(userService)
+	authHandler := handlers.NewAuthHandler(userService, jwtService)
 
 	// Initialize API routes
 	router := routes.NewRouter(authHandler)

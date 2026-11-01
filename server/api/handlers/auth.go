@@ -2,17 +2,23 @@ package handlers
 
 import (
 	"encoding/json"
+	"github.com/ben-anass/DouzTach/internal/auth"
 	"github.com/ben-anass/DouzTach/server/users"
 	"net/http"
 )
 
 type AuthHandler struct {
 	userService *users.Service
+	jwtService  *auth.JWTService
 }
 
-func NewAuthHandler(userService *users.Service) *AuthHandler {
+func NewAuthHandler(
+	userService *users.Service,
+	jwtService *auth.JWTService,
+) *AuthHandler {
 	return &AuthHandler{
 		userService: userService,
+		jwtService:  jwtService,
 	}
 }
 

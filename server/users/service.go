@@ -56,3 +56,31 @@ func (s *Service) CreateUser(
 
 	return user, nil
 }
+
+func (s *Service) LoginUser(
+	ctx context.Context,
+	email string,
+	password string,
+) (repository.User, error) {
+
+	email = strings.TrimSpace(strings.ToLower(email))
+
+	if email == "" || password == "" {
+		return repository.User{}, errors.New("email and password are required")
+	}
+
+	user, err := s.queries.GetUserByEmail(ctx, email)
+	if err != nil {
+		return repository.User{}, errors.New("invalid email or password")
+	}
+
+	err = bcrypt.CompareHashAndPassword(
+		[]byte(user.PasswordHash),
+		[]byte(password),
+	)
+	if err != nil {
+		return repository.User{}, errors.New("invalid email or password")
+	}
+
+	return user, nil
+}
