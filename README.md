@@ -259,6 +259,60 @@ go test ./...
 
 ---
 
+## 👥 Team & Responsibilities
+
+DouzTach is developed by a team of three members, with each member responsible for a specific part of the project. We collaborate to build an integrated, reliable, and scalable team collaboration platform.
+
+### 🖥️ Member 1 — `HSassouma`
+**CLI & Terminal UI Client**
+
+Responsible for the client-side terminal experience and interface design.
+
+- CLI architecture and command management.
+- Terminal UI design and dashboard.
+- Interactive prompts and user navigation.
+- Tables, colors, and terminal styling.
+- Client-side user experience.
+
+### ⚙️ Member 2 — `ben-anass`
+**Backend & Authentication**
+
+Responsible for the server-side architecture, API development, and user authentication.
+
+- Go REST API development.
+- User registration and login.
+- User management.
+- Workspaces and member management.
+- Invitations system.
+- Permissions and access control.
+
+### 🗄️ Member 3 — `0xm3d`
+**Database & Collaboration Features**
+
+Responsible for database architecture and core collaboration features.
+
+- PostgreSQL database management.
+- Database schema and migrations.
+- Tasks and epics management.
+- Scrum workflows.
+- Real-time chat.
+- Notifications system.
+- Activity tracking.
+
+---
+
+### 🤝 Collaboration
+
+Each member works on a dedicated development area while collaborating with the rest of the team through Git and a shared development workflow.
+
+Our goal is to combine our individual contributions into one unified platform: **DouzTach**.
+
+**Three members. Three responsibilities. One project.** 🚀
+
+
+---
+
+
 ## 🌿 Git Workflow
 
 The project uses a three-branch workflow:
