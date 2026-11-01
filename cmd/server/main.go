@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"github.com/ben-anass/DouzTach/internal/repository"
+	"github.com/joho/godotenv"
 	"log"
 	"net/http"
-
-	"github.com/joho/godotenv"
 
 	"github.com/ben-anass/DouzTach/internal/database"
 	"github.com/ben-anass/DouzTach/server/api/routes"
@@ -27,6 +27,10 @@ func main() {
 	defer db.Close()
 
 	log.Println("Database connected successfully!")
+	// Initialize database queries
+	queries := repository.New(db)
+
+	log.Println("Database queries initialized:", queries != nil)
 
 	// Initialize API routes
 	router := routes.NewRouter()
