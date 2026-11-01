@@ -22,16 +22,19 @@ func NewService(queries *repository.Queries) *Service {
 
 func (s *Service) CreateUser(
 	ctx context.Context,
-	name string,
+	username string,
+	nickname string,
 	email string,
 	password string,
+	favoriteLanguage string,
 ) (repository.User, error) {
-
-	name = strings.TrimSpace(name)
+	username = strings.TrimSpace(username)
+	nickname = strings.TrimSpace(nickname)
 	email = strings.TrimSpace(strings.ToLower(email))
+	favoriteLanguage = strings.TrimSpace(favoriteLanguage)
 
-	if name == "" || email == "" || password == "" {
-		return repository.User{}, errors.New("all fields are required")
+	if username == "" || nickname == "" || email == "" || password == "" {
+		return repository.User{}, errors.New("all required fields are required")
 	}
 
 	if len(password) < 8 {
@@ -47,9 +50,14 @@ func (s *Service) CreateUser(
 	}
 
 	user, err := s.queries.CreateUser(ctx, repository.CreateUserParams{
-		Name:         name,
+		Username:     username,
+		Nickname:     nickname,
 		Email:        email,
 		PasswordHash: string(passwordHash),
+		FavoriteLanguage: pgtype.Text{
+			String: favoriteLanguage,
+			Valid:  favoriteLanguage != "",
+		},
 	})
 	if err != nil {
 		return repository.User{}, err

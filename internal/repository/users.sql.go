@@ -13,38 +13,56 @@ import (
 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (
-    name,
+    username,
+    nickname,
     email,
-    password_hash
+    password_hash,
+    favorite_language
 )
 VALUES (
     $1,
     $2,
-    $3
+    $3,
+    $4,
+    $5
 )
 RETURNING
     id,
-    name,
+    username,
+    nickname,
     email,
     password_hash,
+    favorite_language,
+    last_login_at,
     created_at,
     updated_at
 `
 
 type CreateUserParams struct {
-	Name         string `json:"name"`
-	Email        string `json:"email"`
-	PasswordHash string `json:"password_hash"`
+	Username         string      `json:"username"`
+	Nickname         string      `json:"nickname"`
+	Email            string      `json:"email"`
+	PasswordHash     string      `json:"password_hash"`
+	FavoriteLanguage pgtype.Text `json:"favorite_language"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, createUser, arg.Name, arg.Email, arg.PasswordHash)
+	row := q.db.QueryRow(ctx, createUser,
+		arg.Username,
+		arg.Nickname,
+		arg.Email,
+		arg.PasswordHash,
+		arg.FavoriteLanguage,
+	)
 	var i User
 	err := row.Scan(
 		&i.ID,
-		&i.Name,
+		&i.Username,
+		&i.Nickname,
 		&i.Email,
 		&i.PasswordHash,
+		&i.FavoriteLanguage,
+		&i.LastLoginAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -54,9 +72,12 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 const getUserByEmail = `-- name: GetUserByEmail :one
 SELECT
     id,
-    name,
+    username,
+    nickname,
     email,
     password_hash,
+    favorite_language,
+    last_login_at,
     created_at,
     updated_at
 FROM users
@@ -69,9 +90,12 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 	var i User
 	err := row.Scan(
 		&i.ID,
-		&i.Name,
+		&i.Username,
+		&i.Nickname,
 		&i.Email,
 		&i.PasswordHash,
+		&i.FavoriteLanguage,
+		&i.LastLoginAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -81,9 +105,12 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 const getUserByID = `-- name: GetUserByID :one
 SELECT
     id,
-    name,
+    username,
+    nickname,
     email,
     password_hash,
+    favorite_language,
+    last_login_at,
     created_at,
     updated_at
 FROM users
@@ -96,9 +123,45 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	var i User
 	err := row.Scan(
 		&i.ID,
-		&i.Name,
+		&i.Username,
+		&i.Nickname,
 		&i.Email,
 		&i.PasswordHash,
+		&i.FavoriteLanguage,
+		&i.LastLoginAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserByUsername = `-- name: GetUserByUsername :one
+SELECT
+    id,
+    username,
+    nickname,
+    email,
+    password_hash,
+    favorite_language,
+    last_login_at,
+    created_at,
+    updated_at
+FROM users
+WHERE username = $1
+LIMIT 1
+`
+
+func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByUsername, username)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Username,
+		&i.Nickname,
+		&i.Email,
+		&i.PasswordHash,
+		&i.FavoriteLanguage,
+		&i.LastLoginAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
