@@ -52,9 +52,10 @@ func meHandler(userService *users.Service, w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 
 	json.NewEncoder(w).Encode(map[string]string{
-		"id":    user.ID.String(),
-		"name":  user.Name,
-		"email": user.Email,
+		"id":       user.ID.String(),
+		"username": user.Username,
+		"nickname": user.Nickname,
+		"email":    user.Email,
 	})
 }
 
