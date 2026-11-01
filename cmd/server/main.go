@@ -53,7 +53,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler(userService, jwtService)
 
 	// Initialize API routes
-	router := routes.NewRouter(authHandler)
+	router := routes.NewRouter(authHandler, jwtService, userService)
 
 	// Start HTTP server
 	port := ":8080"

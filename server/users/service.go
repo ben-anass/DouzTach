@@ -93,3 +93,22 @@ func (s *Service) LoginUser(
 
 	return user, nil
 }
+
+func (s *Service) GetUserByID(
+	ctx context.Context,
+	userID string,
+) (repository.User, error) {
+
+	var id pgtype.UUID
+
+	if err := id.Scan(userID); err != nil {
+		return repository.User{}, errors.New("invalid user ID")
+	}
+
+	user, err := s.queries.GetUserByID(ctx, id)
+	if err != nil {
+		return repository.User{}, errors.New("user not found")
+	}
+
+	return user, nil
+}
