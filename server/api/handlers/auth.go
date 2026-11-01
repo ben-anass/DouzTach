@@ -28,6 +28,11 @@ type RegisterRequest struct {
 	Password string `json:"password"`
 }
 
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -57,5 +62,55 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		"message": "User registered successfully",
 		"name":    user.Name,
 		"email":   user.Email,
+	})
+}
+
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req LoginRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "invalid request body",
+		})
+		return
+	}
+
+	// Verify user credentials
+	user, err := h.userService.LoginUser(
+		r.Context(),
+		req.Email,
+		req.Password,
+	)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "invalid email or password",
+		})
+		return
+	}
+
+	// Generate JWT token
+	token, err := h.jwtService.GenerateToken(user.ID.String())
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "could not generate token",
+		})
+		return
+	}
+
+	// Send response
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Login successful",
+		"token":   token,
+		"user": map[string]string{
+			"id":    user.ID.String(),
+			"name":  user.Name,
+			"email": user.Email,
+		},
 	})
 }
