@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -88,6 +89,53 @@ func TestValidateWorkItemHierarchy(t *testing.T) {
 				t.Fatalf("validateWorkItem() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidateSprint(t *testing.T) {
+	workspaceID := pgtype.UUID{Valid: true}
+	actorID := pgtype.UUID{Valid: true}
+
+	tests := []struct {
+		name    string
+		start   pgtype.Date
+		end     pgtype.Date
+		wantErr bool
+	}{
+		{name: "valid sprint"},
+		{
+			name:    "rejects reversed date range",
+			start:   testDate(2026, time.November, 2),
+			end:     testDate(2026, time.November, 1),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSprint(workspaceID, actorID, "Sprint 1", tt.start, tt.end)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateSprint() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSprintConflictErrors(t *testing.T) {
+	if !isActiveSprintConflict(&pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "idx_sprints_one_active_per_workspace",
+	}) {
+		t.Fatal("isActiveSprintConflict() did not recognize the active sprint constraint")
+	}
+	if !isSprintStoryConflict(&pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "idx_sprint_stories_story_id",
+	}) {
+		t.Fatal("isSprintStoryConflict() did not recognize the unique story membership constraint")
+	}
+	if isActiveSprintConflict(&pgconn.PgError{Code: "23505", ConstraintName: "other_unique_index"}) {
+		t.Fatal("isActiveSprintConflict() recognized an unrelated unique constraint")
 	}
 }
 

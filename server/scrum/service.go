@@ -60,7 +60,6 @@ type CreateUserStoryInput struct {
 	Status             string
 	Priority           string
 	AssigneeID         pgtype.UUID
-	SprintID           pgtype.UUID
 	StoryPoints        pgtype.Int4
 }
 
@@ -241,7 +240,7 @@ func (s *Service) CreateUserStory(ctx context.Context, input CreateUserStoryInpu
 	}
 
 	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.UserStory, error) {
-		if err := validateStoryReferences(ctx, q, input.WorkspaceID, input.EpicID, input.SprintID); err != nil {
+		if err := validateStoryReferences(ctx, q, input.WorkspaceID, input.EpicID); err != nil {
 			return repository.UserStory{}, err
 		}
 		if err := validateAssignee(ctx, q, input.WorkspaceID, input.AssigneeID); err != nil {
@@ -257,7 +256,6 @@ func (s *Service) CreateUserStory(ctx context.Context, input CreateUserStoryInpu
 			Priority:           input.Priority,
 			AssigneeID:         input.AssigneeID,
 			ReporterID:         input.ActorUserID,
-			SprintID:           input.SprintID,
 			StoryPoints:        input.StoryPoints,
 		})
 		if err != nil {
@@ -308,7 +306,7 @@ func (s *Service) UpdateUserStory(ctx context.Context, input UpdateUserStoryInpu
 		if err != nil {
 			return repository.UserStory{}, notFound(err)
 		}
-		if err := validateStoryReferences(ctx, q, input.WorkspaceID, input.EpicID, input.SprintID); err != nil {
+		if err := validateStoryReferences(ctx, q, input.WorkspaceID, input.EpicID); err != nil {
 			return repository.UserStory{}, err
 		}
 		if err := validateAssignee(ctx, q, input.WorkspaceID, input.AssigneeID); err != nil {
@@ -324,7 +322,6 @@ func (s *Service) UpdateUserStory(ctx context.Context, input UpdateUserStoryInpu
 			Status:             input.Status,
 			Priority:           input.Priority,
 			AssigneeID:         input.AssigneeID,
-			SprintID:           input.SprintID,
 			StoryPoints:        input.StoryPoints,
 		})
 		if err != nil {
@@ -668,16 +665,15 @@ func validateWorkItem(workspaceID, actorID pgtype.UUID, title, itemType, status,
 	return nil
 }
 
-func validateStoryReferences(ctx context.Context, q *repository.Queries, workspaceID, epicID, sprintID pgtype.UUID) error {
+func validateStoryReferences(ctx context.Context, q *repository.Queries, workspaceID, epicID pgtype.UUID) error {
 	row, err := q.CheckUserStoryReferences(ctx, repository.CheckUserStoryReferencesParams{
 		WorkspaceID: workspaceID,
 		EpicID:      epicID,
-		SprintID:    sprintID,
 	})
 	if err != nil {
 		return fmt.Errorf("validate user story references: %w", err)
 	}
-	if !row.EpicValid.Bool || !row.SprintValid.Bool {
+	if !row.Bool {
 		return ErrInvalidReference
 	}
 	return nil

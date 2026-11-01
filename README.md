@@ -200,7 +200,7 @@ Expected response:
 
 DouzTach uses PostgreSQL as its primary database.
 
-Versioned schema changes live in `migrations/`, with matching up/down SQL files. Query definitions live in `queries/` and are converted into type-safe Go code using sqlc. The Scrum service in `server/scrum/` provides workspace-scoped epic, user story, and work-item operations; mutations and their activity records are committed in the same database transaction. Deletes are soft deletes so history is retained.
+Versioned schema changes live in `migrations/`, with matching up/down SQL files. Query definitions live in `queries/` and are converted into type-safe Go code using sqlc. The Scrum service in `server/scrum/` provides workspace-scoped epic, user story, work-item, backlog, and sprint operations; mutations and their activity records are committed in the same database transaction. Deletes are soft deletes so history is retained. Sprint membership uses `sprint_stories` as its source of truth, and PostgreSQL enforces one active sprint per workspace.
 
 Generate database code:
 

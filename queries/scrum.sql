@@ -139,11 +139,10 @@ INSERT INTO user_stories (
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 )
 RETURNING
     id,
@@ -156,11 +155,11 @@ RETURNING
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at;
+    deleted_at,
+    backlog_position;
 
 -- name: ListUserStoriesForWorkspace :many
 SELECT
@@ -174,11 +173,11 @@ SELECT
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at
+    deleted_at,
+    backlog_position
 FROM user_stories
 WHERE workspace_id = $1
   AND deleted_at IS NULL
@@ -196,11 +195,11 @@ SELECT
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at
+    deleted_at,
+    backlog_position
 FROM user_stories
 WHERE id = $1
   AND workspace_id = $2
@@ -214,13 +213,7 @@ SELECT
         WHERE e.id = sqlc.arg(epic_id)::uuid
           AND e.workspace_id = sqlc.arg(workspace_id)::uuid
           AND e.deleted_at IS NULL
-    )) AS epic_valid,
-    (sqlc.arg(sprint_id)::uuid IS NULL OR EXISTS (
-        SELECT 1 FROM sprints s
-        WHERE s.id = sqlc.arg(sprint_id)::uuid
-          AND s.workspace_id = sqlc.arg(workspace_id)::uuid
-          AND s.status IN ('planned', 'active')
-    )) AS sprint_valid;
+    )) AS epic_valid;
 
 -- name: UpdateUserStory :one
 UPDATE user_stories
@@ -232,8 +225,7 @@ SET
     status = $7,
     priority = $8,
     assignee_id = $9,
-    sprint_id = $10,
-    story_points = $11,
+    story_points = $10,
     updated_at = NOW()
 WHERE id = $1
   AND workspace_id = $2
@@ -249,11 +241,11 @@ RETURNING
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at;
+    deleted_at,
+    backlog_position;
 
 -- name: SoftDeleteUserStory :one
 UPDATE user_stories
@@ -302,6 +294,261 @@ SELECT
 FROM sprints
 WHERE workspace_id = $1
 ORDER BY created_at DESC;
+
+-- name: GetSprint :one
+SELECT
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+FROM sprints
+WHERE id = $1
+  AND workspace_id = $2
+LIMIT 1;
+
+-- name: GetSprintForUpdate :one
+SELECT
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+FROM sprints
+WHERE id = $1
+  AND workspace_id = $2
+FOR UPDATE;
+
+-- name: UpdatePlannedSprint :one
+UPDATE sprints
+SET
+    name = $3,
+    goal = $4,
+    start_date = $5,
+    end_date = $6,
+    updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'planned'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at;
+
+-- name: StartSprint :one
+UPDATE sprints
+SET status = 'active', updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'planned'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at;
+
+-- name: CompleteSprint :one
+UPDATE sprints
+SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'active'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at;
+
+-- name: ReopenSprint :one
+UPDATE sprints
+SET status = 'planned', completed_at = NULL, updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'completed'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at;
+
+-- name: ListBacklogStories :many
+SELECT
+    us.id,
+    us.workspace_id,
+    us.epic_id,
+    us.title,
+    us.description,
+    us.acceptance_criteria,
+    us.status,
+    us.priority,
+    us.assignee_id,
+    us.reporter_id,
+    us.story_points,
+    us.backlog_position,
+    us.created_at,
+    us.updated_at,
+    us.deleted_at
+FROM user_stories us
+WHERE us.workspace_id = $1
+  AND us.deleted_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM sprint_stories ss
+      JOIN sprints s ON s.id = ss.sprint_id
+      WHERE ss.story_id = us.id
+        AND s.workspace_id = us.workspace_id
+  )
+ORDER BY us.backlog_position, us.created_at, us.id;
+
+-- name: SetBacklogStoryPosition :one
+UPDATE user_stories us
+SET backlog_position = $3, updated_at = NOW()
+WHERE us.id = $1
+  AND us.workspace_id = $2
+  AND us.deleted_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM sprint_stories ss WHERE ss.story_id = us.id
+  )
+RETURNING
+    id,
+    workspace_id,
+    title,
+    backlog_position;
+
+-- name: NextSprintStoryPosition :one
+SELECT COALESCE(MAX(position), -1) + 1
+FROM sprint_stories
+WHERE sprint_id = $1;
+
+-- name: CanAddStoryToSprint :one
+SELECT
+    EXISTS (
+        SELECT 1
+        FROM user_stories us
+        WHERE us.id = sqlc.arg(story_id)::uuid
+          AND us.workspace_id = sqlc.arg(workspace_id)::uuid
+          AND us.deleted_at IS NULL
+    ) AS story_valid,
+    EXISTS (
+        SELECT 1
+        FROM sprints s
+        WHERE s.id = sqlc.arg(sprint_id)::uuid
+          AND s.workspace_id = sqlc.arg(workspace_id)::uuid
+          AND s.status = 'planned'
+    ) AS sprint_valid,
+    NOT EXISTS (
+        SELECT 1
+        FROM sprint_stories ss
+        WHERE ss.story_id = sqlc.arg(story_id)::uuid
+    ) AS story_unassigned;
+
+-- name: AddStoryToSprint :one
+INSERT INTO sprint_stories (sprint_id, story_id, position)
+SELECT
+    sqlc.arg(sprint_id)::uuid,
+    us.id,
+    sqlc.arg(position)::integer
+FROM user_stories us
+JOIN sprints s ON s.id = sqlc.arg(sprint_id)::uuid
+WHERE us.id = sqlc.arg(story_id)::uuid
+  AND us.workspace_id = sqlc.arg(workspace_id)::uuid
+  AND us.deleted_at IS NULL
+  AND s.workspace_id = us.workspace_id
+  AND s.status = 'planned'
+  AND NOT EXISTS (
+      SELECT 1 FROM sprint_stories ss WHERE ss.story_id = us.id
+  )
+RETURNING id, sprint_id, story_id, added_at, position;
+
+-- name: RemoveStoryFromSprint :one
+DELETE FROM sprint_stories ss
+USING user_stories us, sprints s
+WHERE ss.sprint_id = sqlc.arg(sprint_id)::uuid
+  AND ss.story_id = sqlc.arg(story_id)::uuid
+  AND us.id = ss.story_id
+  AND us.workspace_id = sqlc.arg(workspace_id)::uuid
+  AND us.deleted_at IS NULL
+  AND s.id = ss.sprint_id
+  AND s.workspace_id = us.workspace_id
+  AND s.status = 'planned'
+RETURNING ss.id, ss.sprint_id, ss.story_id, ss.added_at, ss.position;
+
+-- name: ListStoriesForSprint :many
+SELECT
+    us.id,
+    us.workspace_id,
+    us.epic_id,
+    us.title,
+    us.description,
+    us.acceptance_criteria,
+    us.status,
+    us.priority,
+    us.assignee_id,
+    us.reporter_id,
+    us.story_points,
+    us.backlog_position,
+    us.created_at,
+    us.updated_at,
+    us.deleted_at
+FROM user_stories us
+JOIN sprint_stories ss ON ss.story_id = us.id
+JOIN sprints s ON s.id = ss.sprint_id
+WHERE s.id = $1
+  AND s.workspace_id = $2
+  AND us.workspace_id = s.workspace_id
+  AND us.deleted_at IS NULL
+ORDER BY ss.position, ss.added_at, us.id;
+
+-- name: GetSprintReport :one
+SELECT
+    COUNT(us.id)::BIGINT AS total_stories,
+    COUNT(us.id) FILTER (WHERE us.status = 'done')::BIGINT AS completed_stories,
+    COALESCE(SUM(us.story_points), 0)::BIGINT AS committed_story_points,
+    COALESCE(SUM(us.story_points) FILTER (WHERE us.status = 'done'), 0)::BIGINT AS completed_story_points
+FROM sprints s
+LEFT JOIN sprint_stories ss ON ss.sprint_id = s.id
+LEFT JOIN user_stories us
+    ON us.id = ss.story_id
+   AND us.workspace_id = s.workspace_id
+   AND us.deleted_at IS NULL
+WHERE s.id = $1
+  AND s.workspace_id = $2
+GROUP BY s.id;
 
 -- name: GetWorkItem :one
 SELECT

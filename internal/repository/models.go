@@ -148,11 +148,11 @@ type UserStory struct {
 	Priority           string             `json:"priority"`
 	AssigneeID         pgtype.UUID        `json:"assignee_id"`
 	ReporterID         pgtype.UUID        `json:"reporter_id"`
-	SprintID           pgtype.UUID        `json:"sprint_id"`
 	StoryPoints        pgtype.Int4        `json:"story_points"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+	BacklogPosition    int32              `json:"backlog_position"`
 }
 
 type WorkItem struct {

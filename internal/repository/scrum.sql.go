@@ -11,6 +11,50 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addStoryToSprint = `-- name: AddStoryToSprint :one
+INSERT INTO sprint_stories (sprint_id, story_id, position)
+SELECT
+    $1::uuid,
+    us.id,
+    $2::integer
+FROM user_stories us
+JOIN sprints s ON s.id = $1::uuid
+WHERE us.id = $3::uuid
+  AND us.workspace_id = $4::uuid
+  AND us.deleted_at IS NULL
+  AND s.workspace_id = us.workspace_id
+  AND s.status = 'planned'
+  AND NOT EXISTS (
+      SELECT 1 FROM sprint_stories ss WHERE ss.story_id = us.id
+  )
+RETURNING id, sprint_id, story_id, added_at, position
+`
+
+type AddStoryToSprintParams struct {
+	SprintID    pgtype.UUID `json:"sprint_id"`
+	Position    int32       `json:"position"`
+	StoryID     pgtype.UUID `json:"story_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) AddStoryToSprint(ctx context.Context, arg AddStoryToSprintParams) (SprintStory, error) {
+	row := q.db.QueryRow(ctx, addStoryToSprint,
+		arg.SprintID,
+		arg.Position,
+		arg.StoryID,
+		arg.WorkspaceID,
+	)
+	var i SprintStory
+	err := row.Scan(
+		&i.ID,
+		&i.SprintID,
+		&i.StoryID,
+		&i.AddedAt,
+		&i.Position,
+	)
+	return i, err
+}
+
 const addWorkItemLabel = `-- name: AddWorkItemLabel :one
 INSERT INTO work_item_labels (
     work_item_id,
@@ -37,6 +81,48 @@ func (q *Queries) AddWorkItemLabel(ctx context.Context, arg AddWorkItemLabelPara
 	return i, err
 }
 
+const canAddStoryToSprint = `-- name: CanAddStoryToSprint :one
+SELECT
+    EXISTS (
+        SELECT 1
+        FROM user_stories us
+        WHERE us.id = $1::uuid
+          AND us.workspace_id = $2::uuid
+          AND us.deleted_at IS NULL
+    ) AS story_valid,
+    EXISTS (
+        SELECT 1
+        FROM sprints s
+        WHERE s.id = $3::uuid
+          AND s.workspace_id = $2::uuid
+          AND s.status = 'planned'
+    ) AS sprint_valid,
+    NOT EXISTS (
+        SELECT 1
+        FROM sprint_stories ss
+        WHERE ss.story_id = $1::uuid
+    ) AS story_unassigned
+`
+
+type CanAddStoryToSprintParams struct {
+	StoryID     pgtype.UUID `json:"story_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	SprintID    pgtype.UUID `json:"sprint_id"`
+}
+
+type CanAddStoryToSprintRow struct {
+	StoryValid      bool `json:"story_valid"`
+	SprintValid     bool `json:"sprint_valid"`
+	StoryUnassigned bool `json:"story_unassigned"`
+}
+
+func (q *Queries) CanAddStoryToSprint(ctx context.Context, arg CanAddStoryToSprintParams) (CanAddStoryToSprintRow, error) {
+	row := q.db.QueryRow(ctx, canAddStoryToSprint, arg.StoryID, arg.WorkspaceID, arg.SprintID)
+	var i CanAddStoryToSprintRow
+	err := row.Scan(&i.StoryValid, &i.SprintValid, &i.StoryUnassigned)
+	return i, err
+}
+
 const checkUserStoryReferences = `-- name: CheckUserStoryReferences :one
 SELECT
     ($1::uuid IS NULL OR EXISTS (
@@ -44,31 +130,19 @@ SELECT
         WHERE e.id = $1::uuid
           AND e.workspace_id = $2::uuid
           AND e.deleted_at IS NULL
-    )) AS epic_valid,
-    ($3::uuid IS NULL OR EXISTS (
-        SELECT 1 FROM sprints s
-        WHERE s.id = $3::uuid
-          AND s.workspace_id = $2::uuid
-          AND s.status IN ('planned', 'active')
-    )) AS sprint_valid
+    )) AS epic_valid
 `
 
 type CheckUserStoryReferencesParams struct {
 	EpicID      pgtype.UUID `json:"epic_id"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	SprintID    pgtype.UUID `json:"sprint_id"`
 }
 
-type CheckUserStoryReferencesRow struct {
-	EpicValid   pgtype.Bool `json:"epic_valid"`
-	SprintValid pgtype.Bool `json:"sprint_valid"`
-}
-
-func (q *Queries) CheckUserStoryReferences(ctx context.Context, arg CheckUserStoryReferencesParams) (CheckUserStoryReferencesRow, error) {
-	row := q.db.QueryRow(ctx, checkUserStoryReferences, arg.EpicID, arg.WorkspaceID, arg.SprintID)
-	var i CheckUserStoryReferencesRow
-	err := row.Scan(&i.EpicValid, &i.SprintValid)
-	return i, err
+func (q *Queries) CheckUserStoryReferences(ctx context.Context, arg CheckUserStoryReferencesParams) (pgtype.Bool, error) {
+	row := q.db.QueryRow(ctx, checkUserStoryReferences, arg.EpicID, arg.WorkspaceID)
+	var epic_valid pgtype.Bool
+	err := row.Scan(&epic_valid)
+	return epic_valid, err
 }
 
 const checkWorkItemLabelReferences = `-- name: CheckWorkItemLabelReferences :one
@@ -149,6 +223,48 @@ func (q *Queries) CheckWorkItemReferences(ctx context.Context, arg CheckWorkItem
 	)
 	var i CheckWorkItemReferencesRow
 	err := row.Scan(&i.StoryValid, &i.SprintValid, &i.ParentValid)
+	return i, err
+}
+
+const completeSprint = `-- name: CompleteSprint :one
+UPDATE sprints
+SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'active'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+`
+
+type CompleteSprintParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CompleteSprint(ctx context.Context, arg CompleteSprintParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, completeSprint, arg.ID, arg.WorkspaceID)
+	var i Sprint
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Goal,
+		&i.Status,
+		&i.StartDate,
+		&i.EndDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
 	return i, err
 }
 
@@ -327,11 +443,10 @@ INSERT INTO user_stories (
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 )
 RETURNING
     id,
@@ -344,11 +459,11 @@ RETURNING
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at
+    deleted_at,
+    backlog_position
 `
 
 type CreateUserStoryParams struct {
@@ -361,7 +476,6 @@ type CreateUserStoryParams struct {
 	Priority           string      `json:"priority"`
 	AssigneeID         pgtype.UUID `json:"assignee_id"`
 	ReporterID         pgtype.UUID `json:"reporter_id"`
-	SprintID           pgtype.UUID `json:"sprint_id"`
 	StoryPoints        pgtype.Int4 `json:"story_points"`
 }
 
@@ -376,7 +490,6 @@ func (q *Queries) CreateUserStory(ctx context.Context, arg CreateUserStoryParams
 		arg.Priority,
 		arg.AssigneeID,
 		arg.ReporterID,
-		arg.SprintID,
 		arg.StoryPoints,
 	)
 	var i UserStory
@@ -391,11 +504,11 @@ func (q *Queries) CreateUserStory(ctx context.Context, arg CreateUserStoryParams
 		&i.Priority,
 		&i.AssigneeID,
 		&i.ReporterID,
-		&i.SprintID,
 		&i.StoryPoints,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.BacklogPosition,
 	)
 	return i, err
 }
@@ -585,6 +698,129 @@ func (q *Queries) GetEpicProgress(ctx context.Context, arg GetEpicProgressParams
 	return i, err
 }
 
+const getSprint = `-- name: GetSprint :one
+SELECT
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+FROM sprints
+WHERE id = $1
+  AND workspace_id = $2
+LIMIT 1
+`
+
+type GetSprintParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetSprint(ctx context.Context, arg GetSprintParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, getSprint, arg.ID, arg.WorkspaceID)
+	var i Sprint
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Goal,
+		&i.Status,
+		&i.StartDate,
+		&i.EndDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getSprintForUpdate = `-- name: GetSprintForUpdate :one
+SELECT
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+FROM sprints
+WHERE id = $1
+  AND workspace_id = $2
+FOR UPDATE
+`
+
+type GetSprintForUpdateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetSprintForUpdate(ctx context.Context, arg GetSprintForUpdateParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, getSprintForUpdate, arg.ID, arg.WorkspaceID)
+	var i Sprint
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Goal,
+		&i.Status,
+		&i.StartDate,
+		&i.EndDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const getSprintReport = `-- name: GetSprintReport :one
+SELECT
+    COUNT(us.id)::BIGINT AS total_stories,
+    COUNT(us.id) FILTER (WHERE us.status = 'done')::BIGINT AS completed_stories,
+    COALESCE(SUM(us.story_points), 0)::BIGINT AS committed_story_points,
+    COALESCE(SUM(us.story_points) FILTER (WHERE us.status = 'done'), 0)::BIGINT AS completed_story_points
+FROM sprints s
+LEFT JOIN sprint_stories ss ON ss.sprint_id = s.id
+LEFT JOIN user_stories us
+    ON us.id = ss.story_id
+   AND us.workspace_id = s.workspace_id
+   AND us.deleted_at IS NULL
+WHERE s.id = $1
+  AND s.workspace_id = $2
+GROUP BY s.id
+`
+
+type GetSprintReportParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type GetSprintReportRow struct {
+	TotalStories         int64 `json:"total_stories"`
+	CompletedStories     int64 `json:"completed_stories"`
+	CommittedStoryPoints int64 `json:"committed_story_points"`
+	CompletedStoryPoints int64 `json:"completed_story_points"`
+}
+
+func (q *Queries) GetSprintReport(ctx context.Context, arg GetSprintReportParams) (GetSprintReportRow, error) {
+	row := q.db.QueryRow(ctx, getSprintReport, arg.ID, arg.WorkspaceID)
+	var i GetSprintReportRow
+	err := row.Scan(
+		&i.TotalStories,
+		&i.CompletedStories,
+		&i.CommittedStoryPoints,
+		&i.CompletedStoryPoints,
+	)
+	return i, err
+}
+
 const getUserStory = `-- name: GetUserStory :one
 SELECT
     id,
@@ -597,11 +833,11 @@ SELECT
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at
+    deleted_at,
+    backlog_position
 FROM user_stories
 WHERE id = $1
   AND workspace_id = $2
@@ -628,11 +864,11 @@ func (q *Queries) GetUserStory(ctx context.Context, arg GetUserStoryParams) (Use
 		&i.Priority,
 		&i.AssigneeID,
 		&i.ReporterID,
-		&i.SprintID,
 		&i.StoryPoints,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.BacklogPosition,
 	)
 	return i, err
 }
@@ -691,6 +927,90 @@ func (q *Queries) GetWorkItem(ctx context.Context, arg GetWorkItemParams) (WorkI
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const listBacklogStories = `-- name: ListBacklogStories :many
+SELECT
+    us.id,
+    us.workspace_id,
+    us.epic_id,
+    us.title,
+    us.description,
+    us.acceptance_criteria,
+    us.status,
+    us.priority,
+    us.assignee_id,
+    us.reporter_id,
+    us.story_points,
+    us.backlog_position,
+    us.created_at,
+    us.updated_at,
+    us.deleted_at
+FROM user_stories us
+WHERE us.workspace_id = $1
+  AND us.deleted_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM sprint_stories ss
+      JOIN sprints s ON s.id = ss.sprint_id
+      WHERE ss.story_id = us.id
+        AND s.workspace_id = us.workspace_id
+  )
+ORDER BY us.backlog_position, us.created_at, us.id
+`
+
+type ListBacklogStoriesRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	EpicID             pgtype.UUID        `json:"epic_id"`
+	Title              string             `json:"title"`
+	Description        pgtype.Text        `json:"description"`
+	AcceptanceCriteria pgtype.Text        `json:"acceptance_criteria"`
+	Status             string             `json:"status"`
+	Priority           string             `json:"priority"`
+	AssigneeID         pgtype.UUID        `json:"assignee_id"`
+	ReporterID         pgtype.UUID        `json:"reporter_id"`
+	StoryPoints        pgtype.Int4        `json:"story_points"`
+	BacklogPosition    int32              `json:"backlog_position"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+}
+
+func (q *Queries) ListBacklogStories(ctx context.Context, workspaceID pgtype.UUID) ([]ListBacklogStoriesRow, error) {
+	rows, err := q.db.Query(ctx, listBacklogStories, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBacklogStoriesRow
+	for rows.Next() {
+		var i ListBacklogStoriesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.EpicID,
+			&i.Title,
+			&i.Description,
+			&i.AcceptanceCriteria,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeID,
+			&i.ReporterID,
+			&i.StoryPoints,
+			&i.BacklogPosition,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listEpicsForWorkspace = `-- name: ListEpicsForWorkspace :many
@@ -837,6 +1157,92 @@ func (q *Queries) ListSprintsForWorkspace(ctx context.Context, workspaceID pgtyp
 	return items, nil
 }
 
+const listStoriesForSprint = `-- name: ListStoriesForSprint :many
+SELECT
+    us.id,
+    us.workspace_id,
+    us.epic_id,
+    us.title,
+    us.description,
+    us.acceptance_criteria,
+    us.status,
+    us.priority,
+    us.assignee_id,
+    us.reporter_id,
+    us.story_points,
+    us.backlog_position,
+    us.created_at,
+    us.updated_at,
+    us.deleted_at
+FROM user_stories us
+JOIN sprint_stories ss ON ss.story_id = us.id
+JOIN sprints s ON s.id = ss.sprint_id
+WHERE s.id = $1
+  AND s.workspace_id = $2
+  AND us.workspace_id = s.workspace_id
+  AND us.deleted_at IS NULL
+ORDER BY ss.position, ss.added_at, us.id
+`
+
+type ListStoriesForSprintParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type ListStoriesForSprintRow struct {
+	ID                 pgtype.UUID        `json:"id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	EpicID             pgtype.UUID        `json:"epic_id"`
+	Title              string             `json:"title"`
+	Description        pgtype.Text        `json:"description"`
+	AcceptanceCriteria pgtype.Text        `json:"acceptance_criteria"`
+	Status             string             `json:"status"`
+	Priority           string             `json:"priority"`
+	AssigneeID         pgtype.UUID        `json:"assignee_id"`
+	ReporterID         pgtype.UUID        `json:"reporter_id"`
+	StoryPoints        pgtype.Int4        `json:"story_points"`
+	BacklogPosition    int32              `json:"backlog_position"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
+}
+
+func (q *Queries) ListStoriesForSprint(ctx context.Context, arg ListStoriesForSprintParams) ([]ListStoriesForSprintRow, error) {
+	rows, err := q.db.Query(ctx, listStoriesForSprint, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStoriesForSprintRow
+	for rows.Next() {
+		var i ListStoriesForSprintRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.EpicID,
+			&i.Title,
+			&i.Description,
+			&i.AcceptanceCriteria,
+			&i.Status,
+			&i.Priority,
+			&i.AssigneeID,
+			&i.ReporterID,
+			&i.StoryPoints,
+			&i.BacklogPosition,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserStoriesForWorkspace = `-- name: ListUserStoriesForWorkspace :many
 SELECT
     id,
@@ -849,11 +1255,11 @@ SELECT
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at
+    deleted_at,
+    backlog_position
 FROM user_stories
 WHERE workspace_id = $1
   AND deleted_at IS NULL
@@ -880,11 +1286,11 @@ func (q *Queries) ListUserStoriesForWorkspace(ctx context.Context, workspaceID p
 			&i.Priority,
 			&i.AssigneeID,
 			&i.ReporterID,
-			&i.SprintID,
 			&i.StoryPoints,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.BacklogPosition,
 		); err != nil {
 			return nil, err
 		}
@@ -959,6 +1365,52 @@ func (q *Queries) ListWorkItemsForWorkspace(ctx context.Context, workspaceID pgt
 	return items, nil
 }
 
+const nextSprintStoryPosition = `-- name: NextSprintStoryPosition :one
+SELECT COALESCE(MAX(position), -1) + 1
+FROM sprint_stories
+WHERE sprint_id = $1
+`
+
+func (q *Queries) NextSprintStoryPosition(ctx context.Context, sprintID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, nextSprintStoryPosition, sprintID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const removeStoryFromSprint = `-- name: RemoveStoryFromSprint :one
+DELETE FROM sprint_stories ss
+USING user_stories us, sprints s
+WHERE ss.sprint_id = $1::uuid
+  AND ss.story_id = $2::uuid
+  AND us.id = ss.story_id
+  AND us.workspace_id = $3::uuid
+  AND us.deleted_at IS NULL
+  AND s.id = ss.sprint_id
+  AND s.workspace_id = us.workspace_id
+  AND s.status = 'planned'
+RETURNING ss.id, ss.sprint_id, ss.story_id, ss.added_at, ss.position
+`
+
+type RemoveStoryFromSprintParams struct {
+	SprintID    pgtype.UUID `json:"sprint_id"`
+	StoryID     pgtype.UUID `json:"story_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) RemoveStoryFromSprint(ctx context.Context, arg RemoveStoryFromSprintParams) (SprintStory, error) {
+	row := q.db.QueryRow(ctx, removeStoryFromSprint, arg.SprintID, arg.StoryID, arg.WorkspaceID)
+	var i SprintStory
+	err := row.Scan(
+		&i.ID,
+		&i.SprintID,
+		&i.StoryID,
+		&i.AddedAt,
+		&i.Position,
+	)
+	return i, err
+}
+
 const removeWorkItemLabel = `-- name: RemoveWorkItemLabel :one
 DELETE FROM work_item_labels wil
 USING work_items wi, labels l
@@ -982,6 +1434,89 @@ func (q *Queries) RemoveWorkItemLabel(ctx context.Context, arg RemoveWorkItemLab
 	row := q.db.QueryRow(ctx, removeWorkItemLabel, arg.WorkItemID, arg.LabelID, arg.WorkspaceID)
 	var i WorkItemLabel
 	err := row.Scan(&i.WorkItemID, &i.LabelID, &i.CreatedAt)
+	return i, err
+}
+
+const reopenSprint = `-- name: ReopenSprint :one
+UPDATE sprints
+SET status = 'planned', completed_at = NULL, updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'completed'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+`
+
+type ReopenSprintParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ReopenSprint(ctx context.Context, arg ReopenSprintParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, reopenSprint, arg.ID, arg.WorkspaceID)
+	var i Sprint
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Goal,
+		&i.Status,
+		&i.StartDate,
+		&i.EndDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
+const setBacklogStoryPosition = `-- name: SetBacklogStoryPosition :one
+UPDATE user_stories us
+SET backlog_position = $3, updated_at = NOW()
+WHERE us.id = $1
+  AND us.workspace_id = $2
+  AND us.deleted_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM sprint_stories ss WHERE ss.story_id = us.id
+  )
+RETURNING
+    id,
+    workspace_id,
+    title,
+    backlog_position
+`
+
+type SetBacklogStoryPositionParams struct {
+	ID              pgtype.UUID `json:"id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	BacklogPosition int32       `json:"backlog_position"`
+}
+
+type SetBacklogStoryPositionRow struct {
+	ID              pgtype.UUID `json:"id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
+	Title           string      `json:"title"`
+	BacklogPosition int32       `json:"backlog_position"`
+}
+
+func (q *Queries) SetBacklogStoryPosition(ctx context.Context, arg SetBacklogStoryPositionParams) (SetBacklogStoryPositionRow, error) {
+	row := q.db.QueryRow(ctx, setBacklogStoryPosition, arg.ID, arg.WorkspaceID, arg.BacklogPosition)
+	var i SetBacklogStoryPositionRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.BacklogPosition,
+	)
 	return i, err
 }
 
@@ -1066,6 +1601,48 @@ func (q *Queries) SoftDeleteWorkItem(ctx context.Context, arg SoftDeleteWorkItem
 	return i, err
 }
 
+const startSprint = `-- name: StartSprint :one
+UPDATE sprints
+SET status = 'active', updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'planned'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+`
+
+type StartSprintParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) StartSprint(ctx context.Context, arg StartSprintParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, startSprint, arg.ID, arg.WorkspaceID)
+	var i Sprint
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Goal,
+		&i.Status,
+		&i.StartDate,
+		&i.EndDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const updateEpic = `-- name: UpdateEpic :one
 UPDATE epics
 SET
@@ -1137,6 +1714,64 @@ func (q *Queries) UpdateEpic(ctx context.Context, arg UpdateEpicParams) (Epic, e
 	return i, err
 }
 
+const updatePlannedSprint = `-- name: UpdatePlannedSprint :one
+UPDATE sprints
+SET
+    name = $3,
+    goal = $4,
+    start_date = $5,
+    end_date = $6,
+    updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'planned'
+RETURNING
+    id,
+    workspace_id,
+    name,
+    goal,
+    status,
+    start_date,
+    end_date,
+    created_at,
+    updated_at,
+    completed_at
+`
+
+type UpdatePlannedSprintParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Name        string      `json:"name"`
+	Goal        pgtype.Text `json:"goal"`
+	StartDate   pgtype.Date `json:"start_date"`
+	EndDate     pgtype.Date `json:"end_date"`
+}
+
+func (q *Queries) UpdatePlannedSprint(ctx context.Context, arg UpdatePlannedSprintParams) (Sprint, error) {
+	row := q.db.QueryRow(ctx, updatePlannedSprint,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Goal,
+		arg.StartDate,
+		arg.EndDate,
+	)
+	var i Sprint
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Goal,
+		&i.Status,
+		&i.StartDate,
+		&i.EndDate,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const updateUserStory = `-- name: UpdateUserStory :one
 UPDATE user_stories
 SET
@@ -1147,8 +1782,7 @@ SET
     status = $7,
     priority = $8,
     assignee_id = $9,
-    sprint_id = $10,
-    story_points = $11,
+    story_points = $10,
     updated_at = NOW()
 WHERE id = $1
   AND workspace_id = $2
@@ -1164,11 +1798,11 @@ RETURNING
     priority,
     assignee_id,
     reporter_id,
-    sprint_id,
     story_points,
     created_at,
     updated_at,
-    deleted_at
+    deleted_at,
+    backlog_position
 `
 
 type UpdateUserStoryParams struct {
@@ -1181,7 +1815,6 @@ type UpdateUserStoryParams struct {
 	Status             string      `json:"status"`
 	Priority           string      `json:"priority"`
 	AssigneeID         pgtype.UUID `json:"assignee_id"`
-	SprintID           pgtype.UUID `json:"sprint_id"`
 	StoryPoints        pgtype.Int4 `json:"story_points"`
 }
 
@@ -1196,7 +1829,6 @@ func (q *Queries) UpdateUserStory(ctx context.Context, arg UpdateUserStoryParams
 		arg.Status,
 		arg.Priority,
 		arg.AssigneeID,
-		arg.SprintID,
 		arg.StoryPoints,
 	)
 	var i UserStory
@@ -1211,11 +1843,11 @@ func (q *Queries) UpdateUserStory(ctx context.Context, arg UpdateUserStoryParams
 		&i.Priority,
 		&i.AssigneeID,
 		&i.ReporterID,
-		&i.SprintID,
 		&i.StoryPoints,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.BacklogPosition,
 	)
 	return i, err
 }

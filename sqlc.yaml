@@ -8,6 +8,7 @@ sql:
       - "migrations/002_create_workspaces.up.sql"
       - "migrations/003_create_scrum_models.up.sql"
       - "migrations/004_create_collaboration_tables.up.sql"
+      - "migrations/005_normalize_sprint_story_membership.up.sql"
     queries: "queries"
     gen:
       go:
