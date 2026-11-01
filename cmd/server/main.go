@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
-	"github.com/ben-anass/DouzTach/internal/repository"
-	"github.com/joho/godotenv"
 	"log"
 	"net/http"
 
+	"github.com/joho/godotenv"
+
 	"github.com/ben-anass/DouzTach/internal/database"
+	"github.com/ben-anass/DouzTach/internal/repository"
+	"github.com/ben-anass/DouzTach/server/api/handlers"
 	"github.com/ben-anass/DouzTach/server/api/routes"
+	"github.com/ben-anass/DouzTach/server/users"
 )
 
 func main() {
@@ -32,8 +35,14 @@ func main() {
 
 	log.Println("Database queries initialized:", queries != nil)
 
+	// Initialize user service
+	userService := users.NewService(queries)
+
+	// Initialize authentication handler
+	authHandler := handlers.NewAuthHandler(userService)
+
 	// Initialize API routes
-	router := routes.NewRouter()
+	router := routes.NewRouter(authHandler)
 
 	// Start HTTP server
 	port := ":8080"
