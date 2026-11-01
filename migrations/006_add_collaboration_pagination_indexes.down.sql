@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_activity_logs_workspace_created_at;
+DROP INDEX IF EXISTS idx_notifications_recipient_created_at;
+DROP INDEX IF EXISTS idx_chat_messages_channel_created_at;

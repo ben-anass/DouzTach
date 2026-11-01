@@ -200,7 +200,9 @@ Expected response:
 
 DouzTach uses PostgreSQL as its primary database.
 
-SQL queries are maintained in the `queries/` directory and converted into type-safe Go code using sqlc.
+Versioned schema changes live in `migrations/`, with matching up/down SQL files. Query definitions live in `queries/` and are converted into type-safe Go code using sqlc. The Scrum service in `server/scrum/` provides workspace-scoped epic, user story, work-item, backlog, and sprint operations; mutations and their activity records are committed in the same database transaction. Deletes are soft deletes so history is retained. Sprint membership uses `sprint_stories` as its source of truth, and PostgreSQL enforces one active sprint per workspace.
+
+The collaboration services in `server/chat/`, `server/notifications/`, and `server/activity/` provide workspace-member-checked channel/message operations, notification creation and read tracking, and paginated activity feeds. Chat mutations and their activity records share a transaction. These are service/data-layer features; HTTP endpoints and live delivery still need to be integrated.
 
 Generate database code:
 
@@ -213,6 +215,8 @@ Generated files are stored in:
 ```text
 internal/repository/
 ```
+
+The Scrum service validates work-item hierarchy, status/priority values, date ranges, workspace-scoped references, and assignee membership before persisting changes.
 
 ---
 
@@ -258,6 +262,60 @@ go test ./...
 - [ ] VPS deployment with HTTPS
 
 ---
+
+## 👥 Team & Responsibilities
+
+DouzTach is developed by a team of three members, with each member responsible for a specific part of the project. We collaborate to build an integrated, reliable, and scalable team collaboration platform.
+
+### 🖥️ Member 1 — `HSassouma`
+**CLI & Terminal UI Client**
+
+Responsible for the client-side terminal experience and interface design.
+
+- CLI architecture and command management.
+- Terminal UI design and dashboard.
+- Interactive prompts and user navigation.
+- Tables, colors, and terminal styling.
+- Client-side user experience.
+
+### ⚙️ Member 2 — `ben-anass`
+**Backend & Authentication**
+
+Responsible for the server-side architecture, API development, and user authentication.
+
+- Go REST API development.
+- User registration and login.
+- User management.
+- Workspaces and member management.
+- Invitations system.
+- Permissions and access control.
+
+### 🗄️ Member 3 — `0xm3d`
+**Database & Collaboration Features**
+
+Responsible for database architecture and core collaboration features.
+
+- PostgreSQL database management.
+- Database schema and migrations.
+- Tasks and epics management.
+- Scrum workflows.
+- Real-time chat.
+- Notifications system.
+- Activity tracking.
+
+---
+
+### 🤝 Collaboration
+
+Each member works on a dedicated development area while collaborating with the rest of the team through Git and a shared development workflow.
+
+Our goal is to combine our individual contributions into one unified platform: **DouzTach**.
+
+**Three members. Three responsibilities. One project.** 🚀
+
+
+---
+
 
 ## 🌿 Git Workflow
 
