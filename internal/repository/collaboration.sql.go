@@ -216,6 +216,92 @@ func (q *Queries) CreateNotification(ctx context.Context, arg CreateNotification
 	return i, err
 }
 
+const getChatChannel = `-- name: GetChatChannel :one
+SELECT
+    id,
+    workspace_id,
+    name,
+    kind,
+    created_at,
+    updated_at
+FROM chat_channels
+WHERE id = $1
+  AND workspace_id = $2
+`
+
+type GetChatChannelParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) GetChatChannel(ctx context.Context, arg GetChatChannelParams) (ChatChannel, error) {
+	row := q.db.QueryRow(ctx, getChatChannel, arg.ID, arg.WorkspaceID)
+	var i ChatChannel
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listActivityForWorkspace = `-- name: ListActivityForWorkspace :many
+SELECT
+    id,
+    actor_user_id,
+    workspace_id,
+    action_type,
+    entity_type,
+    entity_id,
+    previous_value,
+    new_value,
+    created_at
+FROM activity_logs
+WHERE workspace_id = $1
+ORDER BY created_at DESC, id DESC
+LIMIT $3
+OFFSET $2
+`
+
+type ListActivityForWorkspaceParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	PageOffset  int32       `json:"page_offset"`
+	PageSize    int32       `json:"page_size"`
+}
+
+func (q *Queries) ListActivityForWorkspace(ctx context.Context, arg ListActivityForWorkspaceParams) ([]ActivityLog, error) {
+	rows, err := q.db.Query(ctx, listActivityForWorkspace, arg.WorkspaceID, arg.PageOffset, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ActivityLog
+	for rows.Next() {
+		var i ActivityLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorUserID,
+			&i.WorkspaceID,
+			&i.ActionType,
+			&i.EntityType,
+			&i.EntityID,
+			&i.PreviousValue,
+			&i.NewValue,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChannelMessages = `-- name: ListChannelMessages :many
 SELECT
     id,
@@ -228,11 +314,27 @@ SELECT
     deleted_at
 FROM chat_messages
 WHERE channel_id = $1
-ORDER BY created_at ASC
+  AND workspace_id = $2
+  AND deleted_at IS NULL
+ORDER BY created_at DESC, id DESC
+LIMIT $4
+OFFSET $3
 `
 
-func (q *Queries) ListChannelMessages(ctx context.Context, channelID pgtype.UUID) ([]ChatMessage, error) {
-	rows, err := q.db.Query(ctx, listChannelMessages, channelID)
+type ListChannelMessagesParams struct {
+	ChannelID   pgtype.UUID `json:"channel_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	PageOffset  int32       `json:"page_offset"`
+	PageSize    int32       `json:"page_size"`
+}
+
+func (q *Queries) ListChannelMessages(ctx context.Context, arg ListChannelMessagesParams) ([]ChatMessage, error) {
+	rows, err := q.db.Query(ctx, listChannelMessages,
+		arg.ChannelID,
+		arg.WorkspaceID,
+		arg.PageOffset,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +362,46 @@ func (q *Queries) ListChannelMessages(ctx context.Context, channelID pgtype.UUID
 	return items, nil
 }
 
+const listChatChannels = `-- name: ListChatChannels :many
+SELECT
+    id,
+    workspace_id,
+    name,
+    kind,
+    created_at,
+    updated_at
+FROM chat_channels
+WHERE workspace_id = $1
+ORDER BY name ASC
+`
+
+func (q *Queries) ListChatChannels(ctx context.Context, workspaceID pgtype.UUID) ([]ChatChannel, error) {
+	rows, err := q.db.Query(ctx, listChatChannels, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChatChannel
+	for rows.Next() {
+		var i ChatChannel
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Kind,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNotificationsForUser = `-- name: ListNotificationsForUser :many
 SELECT
     id,
@@ -272,11 +414,19 @@ SELECT
     read_at
 FROM notifications
 WHERE recipient_user_id = $1
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
+LIMIT $3
+OFFSET $2
 `
 
-func (q *Queries) ListNotificationsForUser(ctx context.Context, recipientUserID pgtype.UUID) ([]Notification, error) {
-	rows, err := q.db.Query(ctx, listNotificationsForUser, recipientUserID)
+type ListNotificationsForUserParams struct {
+	RecipientUserID pgtype.UUID `json:"recipient_user_id"`
+	PageOffset      int32       `json:"page_offset"`
+	PageSize        int32       `json:"page_size"`
+}
+
+func (q *Queries) ListNotificationsForUser(ctx context.Context, arg ListNotificationsForUserParams) ([]Notification, error) {
+	rows, err := q.db.Query(ctx, listNotificationsForUser, arg.RecipientUserID, arg.PageOffset, arg.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -302,4 +452,41 @@ func (q *Queries) ListNotificationsForUser(ctx context.Context, recipientUserID 
 		return nil, err
 	}
 	return items, nil
+}
+
+const markNotificationRead = `-- name: MarkNotificationRead :one
+UPDATE notifications
+SET read_at = COALESCE(read_at, NOW())
+WHERE id = $1
+  AND recipient_user_id = $2
+RETURNING
+    id,
+    recipient_user_id,
+    workspace_id,
+    event_type,
+    related_entity_id,
+    message,
+    created_at,
+    read_at
+`
+
+type MarkNotificationReadParams struct {
+	ID              pgtype.UUID `json:"id"`
+	RecipientUserID pgtype.UUID `json:"recipient_user_id"`
+}
+
+func (q *Queries) MarkNotificationRead(ctx context.Context, arg MarkNotificationReadParams) (Notification, error) {
+	row := q.db.QueryRow(ctx, markNotificationRead, arg.ID, arg.RecipientUserID)
+	var i Notification
+	err := row.Scan(
+		&i.ID,
+		&i.RecipientUserID,
+		&i.WorkspaceID,
+		&i.EventType,
+		&i.RelatedEntityID,
+		&i.Message,
+		&i.CreatedAt,
+		&i.ReadAt,
+	)
+	return i, err
 }

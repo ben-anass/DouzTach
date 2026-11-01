@@ -9,6 +9,7 @@ sql:
       - "migrations/003_create_scrum_models.up.sql"
       - "migrations/004_create_collaboration_tables.up.sql"
       - "migrations/005_normalize_sprint_story_membership.up.sql"
+      - "migrations/006_add_collaboration_pagination_indexes.up.sql"
     queries: "queries"
     gen:
       go:
