@@ -2,16 +2,22 @@ package routes
 
 import (
 	"encoding/json"
-	"net/http"
-
+	"github.com/ben-anass/DouzTach/server/api/handlers"
 	"github.com/go-chi/chi/v5"
+	"net/http"
 )
 
-func NewRouter() http.Handler {
+func NewRouter(authHandler *handlers.AuthHandler) http.Handler {
 	r := chi.NewRouter()
 
 	r.Get("/", homeHandler)
 	r.Get("/health", healthHandler)
+
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Route("/auth", func(r chi.Router) {
+			r.Post("/register", authHandler.Register)
+		})
+	})
 
 	return r
 }
