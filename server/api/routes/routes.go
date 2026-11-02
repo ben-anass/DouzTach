@@ -41,6 +41,22 @@ func NewRouter(
 			"/workspaces/{workspaceID}/members",
 			workspaceHandler.ListMembers,
 		)
+
+		// Remove workspace member
+		r.With(jwtService.Middleware).Delete(
+			"/workspaces/{workspaceID}/members/{userID}",
+			workspaceHandler.RemoveMember,
+		)
+		// Leave workspace
+		r.With(jwtService.Middleware).Delete(
+			"/workspaces/{workspaceID}/leave",
+			workspaceHandler.LeaveWorkspace,
+		)
+		// Change workspace member role
+		r.With(jwtService.Middleware).Patch(
+			"/workspaces/{workspaceID}/members/{userID}/role",
+			workspaceHandler.ChangeMemberRole,
+		)
 		r.With(jwtService.Middleware).Post(
 			"/workspaces/{workspaceID}/invitations",
 			workspaceHandler.CreateInvitation,

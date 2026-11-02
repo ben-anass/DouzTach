@@ -417,3 +417,180 @@ func (h *WorkspaceHandler) CancelInvitation(w http.ResponseWriter, r *http.Reque
 		},
 	})
 }
+
+func (h *WorkspaceHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	requesterID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+	targetUserID := chi.URLParam(r, "userID")
+
+	member, err := h.workspaceService.RemoveMember(
+		r.Context(),
+		workspaceID,
+		requesterID,
+		targetUserID,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID",
+			"invalid user ID",
+			"invalid target user ID":
+
+			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
+
+		case "user is not a workspace member",
+			"you do not have permission to remove members",
+			"admin cannot remove this member":
+
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		case "target user is not a workspace member":
+
+			http.Error(w, `{"error":"member not found"}`, http.StatusNotFound)
+
+		case "cannot remove workspace owner",
+			"cannot remove yourself":
+
+			http.Error(w, `{"error":"member removal conflict"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not remove member"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Workspace member removed successfully",
+		"member": map[string]interface{}{
+			"id":           member.ID.String(),
+			"workspace_id": member.WorkspaceID.String(),
+			"user_id":      member.UserID.String(),
+			"role":         member.Role,
+			"joined_at":    member.JoinedAt.Time,
+		},
+	})
+}
+
+func (h *WorkspaceHandler) ChangeMemberRole(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	requesterID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+	targetUserID := chi.URLParam(r, "userID")
+
+	var req struct {
+		Role string `json:"role"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	member, err := h.workspaceService.ChangeMemberRole(
+		r.Context(),
+		workspaceID,
+		requesterID,
+		targetUserID,
+		req.Role,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID",
+			"invalid user ID",
+			"invalid target user ID",
+			"invalid member role":
+
+			http.Error(w, `{"error":"invalid member data"}`, http.StatusBadRequest)
+
+		case "user is not a workspace member",
+			"you do not have permission to change member roles",
+			"admin cannot change this member role":
+
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		case "target user is not a workspace member":
+
+			http.Error(w, `{"error":"member not found"}`, http.StatusNotFound)
+
+		case "cannot change workspace owner role":
+
+			http.Error(w, `{"error":"cannot change owner role"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not change member role"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Workspace member role updated successfully",
+		"member": map[string]interface{}{
+			"id":           member.ID.String(),
+			"workspace_id": member.WorkspaceID.String(),
+			"user_id":      member.UserID.String(),
+			"role":         member.Role,
+			"joined_at":    member.JoinedAt.Time,
+		},
+	})
+}
+
+func (h *WorkspaceHandler) LeaveWorkspace(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+
+	member, err := h.workspaceService.LeaveWorkspace(
+		r.Context(),
+		workspaceID,
+		userID,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID", "invalid user ID":
+			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
+
+		case "user is not a workspace member":
+			http.Error(w, `{"error":"membership not found"}`, http.StatusNotFound)
+
+		case "workspace owner cannot leave before transferring ownership":
+			http.Error(w, `{"error":"transfer ownership before leaving"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not leave workspace"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "You left the workspace successfully",
+		"membership": map[string]interface{}{
+			"id":           member.ID.String(),
+			"workspace_id": member.WorkspaceID.String(),
+			"user_id":      member.UserID.String(),
+			"role":         member.Role,
+		},
+	})
+}
