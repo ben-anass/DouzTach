@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -23,6 +24,29 @@ func NewService(queries *repository.Queries, db *pgxpool.Pool) *Service {
 		queries: queries,
 		db:      db,
 	}
+}
+
+func ensureWorkspaceActive(
+	ctx context.Context,
+	q *repository.Queries,
+	workspaceID pgtype.UUID,
+) error {
+
+	workspace, err := q.GetWorkspaceByID(ctx, workspaceID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return errors.New("workspace is deleted")
+	}
+
+	return nil
 }
 
 func (s *Service) CreateWorkspace(
@@ -119,6 +143,13 @@ func (s *Service) ListWorkspaceMembers(ctx context.Context, workspaceID, userID 
 	if err := userUUID.Scan(userID); err != nil {
 		return nil, errors.New("invalid user ID")
 	}
+	if err := ensureWorkspaceActive(
+		ctx,
+		s.queries,
+		workspaceUUID,
+	); err != nil {
+		return nil, err
+	}
 
 	// Check if the current user is a member.
 	isMember, err := s.queries.IsWorkspaceMember(ctx, repository.IsWorkspaceMemberParams{
@@ -146,6 +177,461 @@ func (s *Service) ListWorkspaceMembers(ctx context.Context, workspaceID, userID 
 	return members, nil
 }
 
+func (s *Service) TransferOwnership(
+	ctx context.Context,
+	workspaceID string,
+	requesterUserID string,
+	newOwnerUserID string,
+) (repository.Workspace, error) {
+
+	var workspaceUUID pgtype.UUID
+	var requesterUUID pgtype.UUID
+	var newOwnerUUID pgtype.UUID
+
+	if err := workspaceUUID.Scan(workspaceID); err != nil {
+		return repository.Workspace{}, errors.New("invalid workspace ID")
+	}
+
+	if err := requesterUUID.Scan(requesterUserID); err != nil {
+		return repository.Workspace{}, errors.New("invalid user ID")
+	}
+
+	if err := newOwnerUUID.Scan(newOwnerUserID); err != nil {
+		return repository.Workspace{}, errors.New("invalid target user ID")
+	}
+
+	if requesterUUID.Bytes == newOwnerUUID.Bytes {
+		return repository.Workspace{}, errors.New(
+			"cannot transfer ownership to yourself",
+		)
+	}
+
+	// Begin transaction.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"begin transaction: %w", err,
+		)
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	// Lock workspace.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(
+		ctx,
+		workspaceUUID,
+	)
+	if workspace.DeletedAt.Valid {
+		return repository.Workspace{}, errors.New("workspace is deleted")
+	}
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"get workspace: %w", err,
+		)
+	}
+
+	// Verify current owner.
+	if !workspace.OwnerUserID.Valid ||
+		workspace.OwnerUserID.Bytes != requesterUUID.Bytes {
+		return repository.Workspace{}, errors.New(
+			"only workspace owner can transfer ownership",
+		)
+	}
+
+	// Lock current owner's membership.
+	currentRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
+		ctx,
+		repository.GetWorkspaceMemberRoleForUpdateParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      requesterUUID,
+		},
+	)
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"verify current owner membership: %w", err,
+		)
+	}
+
+	if currentRole != "owner" {
+		return repository.Workspace{}, errors.New(
+			"workspace owner membership is inconsistent",
+		)
+	}
+
+	// Verify and lock new owner's membership.
+	targetRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
+		ctx,
+		repository.GetWorkspaceMemberRoleForUpdateParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      newOwnerUUID,
+		},
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New(
+			"target user is not a workspace member",
+		)
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"verify target membership: %w", err,
+		)
+	}
+
+	if targetRole == "owner" {
+		return repository.Workspace{}, errors.New(
+			"target user is already an owner",
+		)
+	}
+
+	// Demote old owner to admin.
+	_, err = qtx.DemoteWorkspaceOwner(
+		ctx,
+		repository.DemoteWorkspaceOwnerParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      requesterUUID,
+		},
+	)
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"demote current owner: %w", err,
+		)
+	}
+
+	// Promote target member to owner.
+	_, err = qtx.UpdateWorkspaceMemberRole(
+		ctx,
+		repository.UpdateWorkspaceMemberRoleParams{
+			Role:        "owner",
+			WorkspaceID: workspaceUUID,
+			UserID:      newOwnerUUID,
+		},
+	)
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"promote new owner: %w", err,
+		)
+	}
+
+	// Update workspace owner_user_id.
+	updatedWorkspace, err := qtx.UpdateWorkspaceOwner(
+		ctx,
+		repository.UpdateWorkspaceOwnerParams{
+			NewOwnerUserID:     newOwnerUUID,
+			ID:                 workspaceUUID,
+			CurrentOwnerUserID: requesterUUID,
+		},
+	)
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"update workspace owner: %w", err,
+		)
+	}
+
+	// Commit all changes together.
+	if err := tx.Commit(ctx); err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"commit ownership transfer: %w", err,
+		)
+	}
+
+	return updatedWorkspace, nil
+}
+
+func (s *Service) UpdateWorkspace(
+	ctx context.Context,
+	workspaceID string,
+	requesterUserID string,
+	name string,
+	nickname string,
+	description string,
+	theme string,
+	accentColor string,
+) (repository.Workspace, error) {
+
+	// Normalize input.
+	name = strings.TrimSpace(name)
+	nickname = strings.TrimSpace(nickname)
+	description = strings.TrimSpace(description)
+	theme = strings.TrimSpace(theme)
+	accentColor = strings.TrimSpace(accentColor)
+
+	// Validate required fields.
+	if name == "" {
+		return repository.Workspace{}, errors.New("workspace name is required")
+	}
+
+	if utf8.RuneCountInString(name) > 150 {
+		return repository.Workspace{}, errors.New("workspace name is too long")
+	}
+
+	if utf8.RuneCountInString(nickname) > 100 {
+		return repository.Workspace{}, errors.New("nickname is too long")
+	}
+
+	if utf8.RuneCountInString(theme) > 50 {
+		return repository.Workspace{}, errors.New("theme is too long")
+	}
+
+	if theme == "" {
+		theme = "default"
+	}
+
+	if accentColor == "" {
+		accentColor = "#6D7CFF"
+	}
+
+	if utf8.RuneCountInString(accentColor) > 30 {
+		return repository.Workspace{}, errors.New("accent color is too long")
+	}
+
+	// Parse UUIDs.
+	var workspaceUUID pgtype.UUID
+	var requesterUUID pgtype.UUID
+
+	if err := workspaceUUID.Scan(workspaceID); err != nil {
+		return repository.Workspace{}, errors.New("invalid workspace ID")
+	}
+
+	if err := requesterUUID.Scan(requesterUserID); err != nil {
+		return repository.Workspace{}, errors.New("invalid user ID")
+	}
+
+	// Begin transaction.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf("begin transaction: %w", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	// Lock workspace.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(
+		ctx,
+		workspaceUUID,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf("get workspace: %w", err)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.Workspace{}, errors.New("workspace is deleted")
+	}
+
+	// Lock and check requester role.
+	requesterRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
+		ctx,
+		repository.GetWorkspaceMemberRoleForUpdateParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      requesterUUID,
+		},
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New("user is not a workspace member")
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"get requester role: %w", err,
+		)
+	}
+
+	// Validate ownership consistency.
+	if requesterRole == "owner" {
+		if !workspace.OwnerUserID.Valid ||
+			workspace.OwnerUserID.Bytes != requesterUUID.Bytes {
+			return repository.Workspace{}, errors.New(
+				"workspace owner membership is inconsistent",
+			)
+		}
+	}
+
+	// Only Owner and Admin can update workspace.
+	if requesterRole != "owner" && requesterRole != "admin" {
+		return repository.Workspace{}, errors.New(
+			"you do not have permission to update workspace",
+		)
+	}
+
+	// Update workspace information.
+	updatedWorkspace, err := qtx.UpdateWorkspace(
+		ctx,
+		repository.UpdateWorkspaceParams{
+			Name:        name,
+			Nickname:    pgtype.Text{String: nickname, Valid: nickname != ""},
+			Description: pgtype.Text{String: description, Valid: description != ""},
+			Theme:       pgtype.Text{String: theme, Valid: true},
+			AccentColor: pgtype.Text{String: accentColor, Valid: true},
+			ID:          workspaceUUID,
+		},
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"update workspace: %w", err,
+		)
+	}
+
+	// Commit transaction.
+	if err := tx.Commit(ctx); err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"commit workspace update: %w", err,
+		)
+	}
+
+	return updatedWorkspace, nil
+}
+
+func (s *Service) DeleteWorkspace(
+	ctx context.Context,
+	workspaceID string,
+	requesterUserID string,
+) (repository.Workspace, error) {
+
+	var workspaceUUID pgtype.UUID
+	var requesterUUID pgtype.UUID
+
+	if err := workspaceUUID.Scan(workspaceID); err != nil {
+		return repository.Workspace{}, errors.New("invalid workspace ID")
+	}
+
+	if err := requesterUUID.Scan(requesterUserID); err != nil {
+		return repository.Workspace{}, errors.New("invalid user ID")
+	}
+
+	// Begin transaction.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"begin transaction: %w", err,
+		)
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	// Lock workspace.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(
+		ctx,
+		workspaceUUID,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"get workspace: %w", err,
+		)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.Workspace{}, errors.New("workspace already deleted")
+	}
+
+	// Verify that requester is the current owner.
+	if !workspace.OwnerUserID.Valid ||
+		workspace.OwnerUserID.Bytes != requesterUUID.Bytes {
+		return repository.Workspace{}, errors.New(
+			"only workspace owner can delete workspace",
+		)
+	}
+
+	// Verify owner membership.
+	role, err := qtx.GetWorkspaceMemberRoleForUpdate(
+		ctx,
+		repository.GetWorkspaceMemberRoleForUpdateParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      requesterUUID,
+		},
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New(
+			"workspace owner membership is missing",
+		)
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"verify owner membership: %w", err,
+		)
+	}
+
+	if role != "owner" {
+		return repository.Workspace{}, errors.New(
+			"workspace ownership is inconsistent",
+		)
+	}
+	// Cancel all pending invitations before deleting workspace.
+	if err := qtx.CancelPendingWorkspaceInvitations(
+		ctx,
+		workspaceUUID,
+	); err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"cancel pending workspace invitations: %w",
+			err,
+		)
+	}
+
+	// Soft-delete workspace.
+	deletedWorkspace, err := qtx.SoftDeleteWorkspace(
+		ctx,
+		workspaceUUID,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New("workspace already deleted")
+	}
+
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"soft delete workspace: %w", err,
+		)
+	}
+
+	// Commit transaction.
+	if err := tx.Commit(ctx); err != nil {
+		return repository.Workspace{}, fmt.Errorf(
+			"commit workspace deletion: %w", err,
+		)
+	}
+
+	return deletedWorkspace, nil
+}
+
 func (s *Service) RemoveMember(
 	ctx context.Context,
 	workspaceID string,
@@ -169,72 +655,90 @@ func (s *Service) RemoveMember(
 		return repository.WorkspaceMember{}, errors.New("invalid target user ID")
 	}
 
-	// Prevent removing yourself.
 	if requesterUUID.Bytes == targetUUID.Bytes {
-		return repository.WorkspaceMember{}, errors.New(
-			"cannot remove yourself",
-		)
+		return repository.WorkspaceMember{}, errors.New("cannot remove yourself")
 	}
 
-	// Get requester's role.
-	requesterRole, err := s.queries.GetWorkspaceMemberRole(
+	// Begin transaction.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.WorkspaceMember{}, fmt.Errorf("begin transaction: %w", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	// Lock workspace first.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(ctx, workspaceUUID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceMember{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.WorkspaceMember{}, fmt.Errorf("get workspace: %w", err)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.WorkspaceMember{}, errors.New("workspace is deleted")
+	}
+
+	// Lock requester membership.
+	requesterRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
 		ctx,
-		repository.GetWorkspaceMemberRoleParams{
+		repository.GetWorkspaceMemberRoleForUpdateParams{
 			WorkspaceID: workspaceUUID,
 			UserID:      requesterUUID,
 		},
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return repository.WorkspaceMember{}, errors.New(
-			"user is not a workspace member",
-		)
+		return repository.WorkspaceMember{}, errors.New("user is not a workspace member")
 	}
 
 	if err != nil {
-		return repository.WorkspaceMember{}, fmt.Errorf(
-			"get requester role: %w", err,
-		)
+		return repository.WorkspaceMember{}, fmt.Errorf("get requester role: %w", err)
 	}
 
-	// Get target member's role.
-	targetRole, err := s.queries.GetWorkspaceMemberRole(
+	// Verify owner consistency.
+	if requesterRole == "owner" &&
+		(!workspace.OwnerUserID.Valid ||
+			workspace.OwnerUserID.Bytes != requesterUUID.Bytes) {
+		return repository.WorkspaceMember{}, errors.New("workspace ownership is inconsistent")
+	}
+
+	// Lock target membership.
+	targetRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
 		ctx,
-		repository.GetWorkspaceMemberRoleParams{
+		repository.GetWorkspaceMemberRoleForUpdateParams{
 			WorkspaceID: workspaceUUID,
 			UserID:      targetUUID,
 		},
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return repository.WorkspaceMember{}, errors.New(
-			"target user is not a workspace member",
-		)
+		return repository.WorkspaceMember{}, errors.New("target user is not a workspace member")
 	}
 
 	if err != nil {
-		return repository.WorkspaceMember{}, fmt.Errorf(
-			"get target member role: %w", err,
-		)
+		return repository.WorkspaceMember{}, fmt.Errorf("get target role: %w", err)
 	}
 
-	// Never remove the workspace owner.
 	if targetRole == "owner" {
-		return repository.WorkspaceMember{}, errors.New(
-			"cannot remove workspace owner",
-		)
+		return repository.WorkspaceMember{}, errors.New("cannot remove workspace owner")
 	}
 
-	// Check requester permissions.
+	// Check permissions.
 	switch requesterRole {
 	case "owner":
 		// Owner can remove admin, member and viewer.
 
 	case "admin":
 		if targetRole != "member" && targetRole != "viewer" {
-			return repository.WorkspaceMember{}, errors.New(
-				"admin cannot remove this member",
-			)
+			return repository.WorkspaceMember{}, errors.New("admin cannot remove this member")
 		}
 
 	default:
@@ -243,8 +747,8 @@ func (s *Service) RemoveMember(
 		)
 	}
 
-	// Remove target member.
-	removedMember, err := s.queries.RemoveWorkspaceMember(
+	// Remove member.
+	removedMember, err := qtx.RemoveWorkspaceMember(
 		ctx,
 		repository.RemoveWorkspaceMemberParams{
 			WorkspaceID: workspaceUUID,
@@ -252,16 +756,15 @@ func (s *Service) RemoveMember(
 		},
 	)
 
-	if errors.Is(err, pgx.ErrNoRows) {
-		return repository.WorkspaceMember{}, errors.New(
-			"target user is not a workspace member",
-		)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return repository.WorkspaceMember{}, errors.New("target user is not a workspace member")
+		}
+		return repository.WorkspaceMember{}, fmt.Errorf("remove workspace member: %w", err)
 	}
 
-	if err != nil {
-		return repository.WorkspaceMember{}, fmt.Errorf(
-			"remove workspace member: %w", err,
-		)
+	if err := tx.Commit(ctx); err != nil {
+		return repository.WorkspaceMember{}, fmt.Errorf("commit member removal: %w", err)
 	}
 
 	return removedMember, nil
@@ -297,6 +800,23 @@ func (s *Service) LeaveWorkspace(
 
 	qtx := s.queries.WithTx(tx)
 
+	// Lock workspace first.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(ctx, workspaceUUID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceMember{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.WorkspaceMember{}, fmt.Errorf(
+			"get workspace: %w", err,
+		)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.WorkspaceMember{}, errors.New("workspace is deleted")
+	}
+
 	// Lock current user's membership.
 	role, err := qtx.GetWorkspaceMemberRoleForUpdate(
 		ctx,
@@ -318,14 +838,24 @@ func (s *Service) LeaveWorkspace(
 		)
 	}
 
-	// Workspace owner must transfer ownership first.
+	isWorkspaceOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == userUUID.Bytes
+
+	// Ensure owner_user_id and membership role are consistent.
+	if (role == "owner") != isWorkspaceOwner {
+		return repository.WorkspaceMember{}, errors.New(
+			"workspace ownership is inconsistent",
+		)
+	}
+
+	// Owner must transfer ownership before leaving.
 	if role == "owner" {
 		return repository.WorkspaceMember{}, errors.New(
 			"workspace owner cannot leave before transferring ownership",
 		)
 	}
 
-	// Remove current user's membership.
+	// Remove current membership.
 	member, err := qtx.RemoveWorkspaceMember(
 		ctx,
 		repository.RemoveWorkspaceMemberParams{
@@ -400,7 +930,27 @@ func (s *Service) ChangeMemberRole(
 
 	qtx := s.queries.WithTx(tx)
 
-	// Lock and get requester's role.
+	// 1. Lock workspace first.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(
+		ctx,
+		workspaceUUID,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceMember{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.WorkspaceMember{}, fmt.Errorf(
+			"get workspace: %w", err,
+		)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.WorkspaceMember{}, errors.New("workspace is deleted")
+	}
+
+	// 2. Lock requester membership.
 	requesterRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
 		ctx,
 		repository.GetWorkspaceMemberRoleForUpdateParams{
@@ -421,7 +971,16 @@ func (s *Service) ChangeMemberRole(
 		)
 	}
 
-	// Lock and get target member's role.
+	requesterIsOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == requesterUUID.Bytes
+
+	if (requesterRole == "owner") != requesterIsOwner {
+		return repository.WorkspaceMember{}, errors.New(
+			"workspace ownership is inconsistent",
+		)
+	}
+
+	// 3. Lock target membership.
 	targetRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
 		ctx,
 		repository.GetWorkspaceMemberRoleForUpdateParams{
@@ -442,17 +1001,25 @@ func (s *Service) ChangeMemberRole(
 		)
 	}
 
-	// Never change the workspace owner's role.
+	targetIsOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == targetUUID.Bytes
+
+	if (targetRole == "owner") != targetIsOwner {
+		return repository.WorkspaceMember{}, errors.New(
+			"workspace ownership is inconsistent",
+		)
+	}
+
 	if targetRole == "owner" {
 		return repository.WorkspaceMember{}, errors.New(
 			"cannot change workspace owner role",
 		)
 	}
 
-	// Check permissions.
+	// 4. Check permissions.
 	switch requesterRole {
 	case "owner":
-		// Owner can assign admin, member or viewer.
+		// Owner can assign admin, member and viewer.
 
 	case "admin":
 		if (targetRole != "member" && targetRole != "viewer") ||
@@ -468,7 +1035,7 @@ func (s *Service) ChangeMemberRole(
 		)
 	}
 
-	// Update member role.
+	// 5. Update target membership.
 	updatedMember, err := qtx.UpdateWorkspaceMemberRole(
 		ctx,
 		repository.UpdateWorkspaceMemberRoleParams{
@@ -490,6 +1057,7 @@ func (s *Service) ChangeMemberRole(
 		)
 	}
 
+	// 6. Commit.
 	if err := tx.Commit(ctx); err != nil {
 		return repository.WorkspaceMember{}, fmt.Errorf(
 			"commit role update: %w", err,

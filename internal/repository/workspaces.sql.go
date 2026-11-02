@@ -93,6 +93,20 @@ func (q *Queries) AddWorkspaceMember(ctx context.Context, arg AddWorkspaceMember
 	return i, err
 }
 
+const cancelPendingWorkspaceInvitations = `-- name: CancelPendingWorkspaceInvitations :exec
+UPDATE workspace_invitations
+SET
+    status = 'cancelled',
+    updated_at = NOW()
+WHERE workspace_id = $1
+  AND status = 'pending'
+`
+
+func (q *Queries) CancelPendingWorkspaceInvitations(ctx context.Context, workspaceID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, cancelPendingWorkspaceInvitations, workspaceID)
+	return err
+}
+
 const cancelWorkspaceInvitation = `-- name: CancelWorkspaceInvitation :one
 UPDATE workspace_invitations
 SET
@@ -271,6 +285,38 @@ func (q *Queries) CreateWorkspaceInvitation(ctx context.Context, arg CreateWorks
 	return i, err
 }
 
+const demoteWorkspaceOwner = `-- name: DemoteWorkspaceOwner :one
+UPDATE workspace_members
+SET role = 'admin'
+WHERE workspace_id = $1
+  AND user_id = $2
+  AND role = 'owner'
+RETURNING
+    id,
+    workspace_id,
+    user_id,
+    role,
+    joined_at
+`
+
+type DemoteWorkspaceOwnerParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) DemoteWorkspaceOwner(ctx context.Context, arg DemoteWorkspaceOwnerParams) (WorkspaceMember, error) {
+	row := q.db.QueryRow(ctx, demoteWorkspaceOwner, arg.WorkspaceID, arg.UserID)
+	var i WorkspaceMember
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.JoinedAt,
+	)
+	return i, err
+}
+
 const expireWorkspaceInvitation = `-- name: ExpireWorkspaceInvitation :one
 UPDATE workspace_invitations
 SET
@@ -350,6 +396,45 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id pgtype.UUID) (Workspa
 	return i, err
 }
 
+const getWorkspaceByIDForUpdate = `-- name: GetWorkspaceByIDForUpdate :one
+SELECT
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at
+FROM workspaces
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetWorkspaceByIDForUpdate(ctx context.Context, id pgtype.UUID) (Workspace, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceByIDForUpdate, id)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerUserID,
+		&i.ParentWorkspaceID,
+		&i.Name,
+		&i.Nickname,
+		&i.Description,
+		&i.Kind,
+		&i.Theme,
+		&i.AccentColor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceInvitationByEmail = `-- name: GetWorkspaceInvitationByEmail :one
 SELECT
     id,
@@ -410,11 +495,48 @@ SELECT
 FROM workspace_invitations
 WHERE token = $1
 LIMIT 1
-FOR UPDATE
 `
 
 func (q *Queries) GetWorkspaceInvitationByToken(ctx context.Context, token pgtype.UUID) (WorkspaceInvitation, error) {
 	row := q.db.QueryRow(ctx, getWorkspaceInvitationByToken, token)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getWorkspaceInvitationByTokenForUpdate = `-- name: GetWorkspaceInvitationByTokenForUpdate :one
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE token = $1
+LIMIT 1
+FOR UPDATE
+`
+
+func (q *Queries) GetWorkspaceInvitationByTokenForUpdate(ctx context.Context, token pgtype.UUID) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceInvitationByTokenForUpdate, token)
 	var i WorkspaceInvitation
 	err := row.Scan(
 		&i.ID,
@@ -599,6 +721,7 @@ SELECT
 FROM workspaces w
 JOIN workspace_members wm ON wm.workspace_id = w.id
 WHERE wm.user_id = $1
+  AND w.deleted_at IS NULL
 ORDER BY w.created_at DESC
 `
 
@@ -705,6 +828,110 @@ func (q *Queries) RemoveWorkspaceMember(ctx context.Context, arg RemoveWorkspace
 	return i, err
 }
 
+const softDeleteWorkspace = `-- name: SoftDeleteWorkspace :one
+UPDATE workspaces
+SET
+    deleted_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+  AND deleted_at IS NULL
+RETURNING
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at
+`
+
+func (q *Queries) SoftDeleteWorkspace(ctx context.Context, id pgtype.UUID) (Workspace, error) {
+	row := q.db.QueryRow(ctx, softDeleteWorkspace, id)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerUserID,
+		&i.ParentWorkspaceID,
+		&i.Name,
+		&i.Nickname,
+		&i.Description,
+		&i.Kind,
+		&i.Theme,
+		&i.AccentColor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const updateWorkspace = `-- name: UpdateWorkspace :one
+UPDATE workspaces
+SET
+    name = $1,
+    nickname = $2,
+    description = $3,
+    theme = $4,
+    accent_color = $5,
+    updated_at = NOW()
+WHERE id = $6
+  AND deleted_at IS NULL
+RETURNING
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at
+`
+
+type UpdateWorkspaceParams struct {
+	Name        string      `json:"name"`
+	Nickname    pgtype.Text `json:"nickname"`
+	Description pgtype.Text `json:"description"`
+	Theme       pgtype.Text `json:"theme"`
+	AccentColor pgtype.Text `json:"accent_color"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) (Workspace, error) {
+	row := q.db.QueryRow(ctx, updateWorkspace,
+		arg.Name,
+		arg.Nickname,
+		arg.Description,
+		arg.Theme,
+		arg.AccentColor,
+		arg.ID,
+	)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerUserID,
+		&i.ParentWorkspaceID,
+		&i.Name,
+		&i.Nickname,
+		&i.Description,
+		&i.Kind,
+		&i.Theme,
+		&i.AccentColor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const updateWorkspaceMemberRole = `-- name: UpdateWorkspaceMemberRole :one
 UPDATE workspace_members
 SET role = $1
@@ -734,6 +961,54 @@ func (q *Queries) UpdateWorkspaceMemberRole(ctx context.Context, arg UpdateWorks
 		&i.UserID,
 		&i.Role,
 		&i.JoinedAt,
+	)
+	return i, err
+}
+
+const updateWorkspaceOwner = `-- name: UpdateWorkspaceOwner :one
+UPDATE workspaces
+SET
+    owner_user_id = $1,
+    updated_at = NOW()
+WHERE id = $2
+  AND owner_user_id = $3
+RETURNING
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at
+`
+
+type UpdateWorkspaceOwnerParams struct {
+	NewOwnerUserID     pgtype.UUID `json:"new_owner_user_id"`
+	ID                 pgtype.UUID `json:"id"`
+	CurrentOwnerUserID pgtype.UUID `json:"current_owner_user_id"`
+}
+
+func (q *Queries) UpdateWorkspaceOwner(ctx context.Context, arg UpdateWorkspaceOwnerParams) (Workspace, error) {
+	row := q.db.QueryRow(ctx, updateWorkspaceOwner, arg.NewOwnerUserID, arg.ID, arg.CurrentOwnerUserID)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.OwnerUserID,
+		&i.ParentWorkspaceID,
+		&i.Name,
+		&i.Nickname,
+		&i.Description,
+		&i.Kind,
+		&i.Theme,
+		&i.AccentColor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
