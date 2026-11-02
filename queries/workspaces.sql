@@ -270,3 +270,35 @@ RETURNING
     expires_at,
     created_at,
     updated_at;
+
+-- name: UpdateWorkspaceMemberRole :one
+UPDATE workspace_members
+SET role = sqlc.arg(role)
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND user_id = sqlc.arg(user_id)
+  AND role != 'owner'
+RETURNING
+    id,
+    workspace_id,
+    user_id,
+    role,
+    joined_at;
+
+-- name: RemoveWorkspaceMember :one
+DELETE FROM workspace_members
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND user_id = sqlc.arg(user_id)
+RETURNING
+    id,
+    workspace_id,
+    user_id,
+    role,
+    joined_at;
+
+-- name: GetWorkspaceMemberRoleForUpdate :one
+SELECT role
+FROM workspace_members
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND user_id = sqlc.arg(user_id)
+LIMIT 1
+FOR UPDATE;
