@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS work_item_labels;
+DROP TABLE IF EXISTS work_items;
+DROP TABLE IF EXISTS sprint_stories;
+DROP TABLE IF EXISTS user_stories;
+DROP TABLE IF EXISTS sprints;
+DROP TABLE IF EXISTS labels;
+DROP TABLE IF EXISTS epics;

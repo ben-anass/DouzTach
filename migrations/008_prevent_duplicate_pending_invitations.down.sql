@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_workspace_invitations_pending_unique_email;
