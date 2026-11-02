@@ -594,3 +594,197 @@ func (h *WorkspaceHandler) LeaveWorkspace(w http.ResponseWriter, r *http.Request
 		},
 	})
 }
+
+func (h *WorkspaceHandler) TransferOwnership(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	requesterID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+
+	var req struct {
+		NewOwnerUserID string `json:"new_owner_user_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	workspace, err := h.workspaceService.TransferOwnership(
+		r.Context(),
+		workspaceID,
+		requesterID,
+		req.NewOwnerUserID,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID",
+			"invalid user ID",
+			"invalid target user ID":
+			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
+
+		case "workspace not found":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "only workspace owner can transfer ownership":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		case "target user is not a workspace member":
+			http.Error(w, `{"error":"target user is not a workspace member"}`, http.StatusConflict)
+
+		case "target user is already an owner",
+			"workspace owner membership is inconsistent":
+			http.Error(w, `{"error":"ownership conflict"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not transfer ownership"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Workspace ownership transferred successfully",
+		"workspace": map[string]interface{}{
+			"id":            workspace.ID.String(),
+			"owner_user_id": workspace.OwnerUserID.String(),
+			"name":          workspace.Name,
+		},
+	})
+}
+
+func (h *WorkspaceHandler) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+
+	var req struct {
+		Name        string `json:"name"`
+		Nickname    string `json:"nickname"`
+		Description string `json:"description"`
+		Theme       string `json:"theme"`
+		AccentColor string `json:"accent_color"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	workspace, err := h.workspaceService.UpdateWorkspace(
+		r.Context(),
+		workspaceID,
+		userID,
+		req.Name,
+		req.Nickname,
+		req.Description,
+		req.Theme,
+		req.AccentColor,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID",
+			"invalid user ID",
+			"workspace name is required",
+			"workspace name is too long",
+			"nickname is too long",
+			"theme is too long",
+			"accent color is too long":
+
+			http.Error(w, `{"error":"invalid workspace data"}`, http.StatusBadRequest)
+
+		case "workspace not found",
+			"workspace is deleted":
+
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "user is not a workspace member",
+			"you do not have permission to update workspace":
+
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		case "workspace owner membership is inconsistent":
+
+			http.Error(w, `{"error":"workspace ownership conflict"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not update workspace"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Workspace updated successfully",
+		"workspace": map[string]interface{}{
+			"id":            workspace.ID.String(),
+			"owner_user_id": workspace.OwnerUserID.String(),
+			"name":          workspace.Name,
+			"nickname":      workspace.Nickname.String,
+			"description":   workspace.Description.String,
+			"kind":          workspace.Kind,
+			"theme":         workspace.Theme.String,
+			"accent_color":  workspace.AccentColor.String,
+			"updated_at":    workspace.UpdatedAt.Time,
+		},
+	})
+}
+
+func (h *WorkspaceHandler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+
+	workspace, err := h.workspaceService.DeleteWorkspace(
+		r.Context(),
+		workspaceID,
+		userID,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID", "invalid user ID":
+			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
+
+		case "workspace not found", "workspace already deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "only workspace owner can delete workspace":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		case "workspace owner membership is missing",
+			"workspace ownership is inconsistent":
+			http.Error(w, `{"error":"workspace ownership conflict"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not delete workspace"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Workspace deleted successfully",
+		"workspace": map[string]interface{}{
+			"id":         workspace.ID.String(),
+			"name":       workspace.Name,
+			"deleted_at": workspace.DeletedAt.Time,
+		},
+	})
+}

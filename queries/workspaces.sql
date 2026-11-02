@@ -60,6 +60,7 @@ SELECT
 FROM workspaces w
 JOIN workspace_members wm ON wm.workspace_id = w.id
 WHERE wm.user_id = $1
+  AND w.deleted_at IS NULL
 ORDER BY w.created_at DESC;
 
 -- name: AddWorkspaceMember :one
@@ -167,8 +168,8 @@ SELECT
     updated_at
 FROM workspace_invitations
 WHERE token = sqlc.arg(token)
-LIMIT 1
-FOR UPDATE;
+LIMIT 1;
+
 
 
 -- name: AcceptWorkspaceInvitation :one
@@ -300,5 +301,130 @@ SELECT role
 FROM workspace_members
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND user_id = sqlc.arg(user_id)
+LIMIT 1
+FOR UPDATE;
+
+-- name: GetWorkspaceByIDForUpdate :one
+SELECT
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at
+FROM workspaces
+WHERE id = sqlc.arg(id)
+FOR UPDATE;
+
+-- name: DemoteWorkspaceOwner :one
+UPDATE workspace_members
+SET role = 'admin'
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND user_id = sqlc.arg(user_id)
+  AND role = 'owner'
+RETURNING
+    id,
+    workspace_id,
+    user_id,
+    role,
+    joined_at;
+
+-- name: UpdateWorkspaceOwner :one
+UPDATE workspaces
+SET
+    owner_user_id = sqlc.arg(new_owner_user_id),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND owner_user_id = sqlc.arg(current_owner_user_id)
+RETURNING
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at;
+
+-- name: UpdateWorkspace :one
+UPDATE workspaces
+SET
+    name = sqlc.arg(name),
+    nickname = sqlc.narg(nickname),
+    description = sqlc.narg(description),
+    theme = sqlc.arg(theme),
+    accent_color = sqlc.arg(accent_color),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND deleted_at IS NULL
+RETURNING
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at;
+
+
+-- name: SoftDeleteWorkspace :one
+UPDATE workspaces
+SET
+    deleted_at = NOW(),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND deleted_at IS NULL
+RETURNING
+    id,
+    owner_user_id,
+    parent_workspace_id,
+    name,
+    nickname,
+    description,
+    kind,
+    theme,
+    accent_color,
+    created_at,
+    updated_at,
+    deleted_at;
+
+-- name: CancelPendingWorkspaceInvitations :exec
+UPDATE workspace_invitations
+SET
+    status = 'cancelled',
+    updated_at = NOW()
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND status = 'pending';
+
+-- name: GetWorkspaceInvitationByTokenForUpdate :one
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE token = sqlc.arg(token)
 LIMIT 1
 FOR UPDATE;
