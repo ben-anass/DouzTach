@@ -452,6 +452,27 @@ func (q *Queries) GetWorkspaceMemberRole(ctx context.Context, arg GetWorkspaceMe
 	return role, err
 }
 
+const getWorkspaceMemberRoleForUpdate = `-- name: GetWorkspaceMemberRoleForUpdate :one
+SELECT role
+FROM workspace_members
+WHERE workspace_id = $1
+  AND user_id = $2
+LIMIT 1
+FOR UPDATE
+`
+
+type GetWorkspaceMemberRoleForUpdateParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetWorkspaceMemberRoleForUpdate(ctx context.Context, arg GetWorkspaceMemberRoleForUpdateParams) (string, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceMemberRoleForUpdate, arg.WorkspaceID, arg.UserID)
+	var role string
+	err := row.Scan(&role)
+	return role, err
+}
+
 const isWorkspaceMember = `-- name: IsWorkspaceMember :one
 SELECT EXISTS (
     SELECT 1
@@ -650,6 +671,69 @@ func (q *Queries) RejectWorkspaceInvitation(ctx context.Context, id pgtype.UUID)
 		&i.ExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const removeWorkspaceMember = `-- name: RemoveWorkspaceMember :one
+DELETE FROM workspace_members
+WHERE workspace_id = $1
+  AND user_id = $2
+RETURNING
+    id,
+    workspace_id,
+    user_id,
+    role,
+    joined_at
+`
+
+type RemoveWorkspaceMemberParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) RemoveWorkspaceMember(ctx context.Context, arg RemoveWorkspaceMemberParams) (WorkspaceMember, error) {
+	row := q.db.QueryRow(ctx, removeWorkspaceMember, arg.WorkspaceID, arg.UserID)
+	var i WorkspaceMember
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.JoinedAt,
+	)
+	return i, err
+}
+
+const updateWorkspaceMemberRole = `-- name: UpdateWorkspaceMemberRole :one
+UPDATE workspace_members
+SET role = $1
+WHERE workspace_id = $2
+  AND user_id = $3
+  AND role != 'owner'
+RETURNING
+    id,
+    workspace_id,
+    user_id,
+    role,
+    joined_at
+`
+
+type UpdateWorkspaceMemberRoleParams struct {
+	Role        string      `json:"role"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) UpdateWorkspaceMemberRole(ctx context.Context, arg UpdateWorkspaceMemberRoleParams) (WorkspaceMember, error) {
+	row := q.db.QueryRow(ctx, updateWorkspaceMemberRole, arg.Role, arg.WorkspaceID, arg.UserID)
+	var i WorkspaceMember
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.JoinedAt,
 	)
 	return i, err
 }
