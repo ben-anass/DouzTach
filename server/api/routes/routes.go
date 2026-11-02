@@ -37,6 +37,17 @@ func NewRouter(
 		r.With(jwtService.Middleware).Post("/workspaces", workspaceHandler.Create)
 		r.With(jwtService.Middleware).Get("/workspaces", workspaceHandler.List)
 
+		// Update workspace
+		r.With(jwtService.Middleware).Put(
+			"/workspaces/{workspaceID}",
+			workspaceHandler.UpdateWorkspace,
+		)
+		// Delete workspace (soft delete)
+		r.With(jwtService.Middleware).Delete(
+			"/workspaces/{workspaceID}",
+			workspaceHandler.DeleteWorkspace,
+		)
+
 		r.With(jwtService.Middleware).Get(
 			"/workspaces/{workspaceID}/members",
 			workspaceHandler.ListMembers,
@@ -51,6 +62,11 @@ func NewRouter(
 		r.With(jwtService.Middleware).Delete(
 			"/workspaces/{workspaceID}/leave",
 			workspaceHandler.LeaveWorkspace,
+		)
+		// Transfer workspace ownership
+		r.With(jwtService.Middleware).Post(
+			"/workspaces/{workspaceID}/transfer-ownership",
+			workspaceHandler.TransferOwnership,
 		)
 		// Change workspace member role
 		r.With(jwtService.Middleware).Patch(
