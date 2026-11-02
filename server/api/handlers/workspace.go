@@ -213,3 +213,207 @@ func (h *WorkspaceHandler) CreateInvitation(w http.ResponseWriter, r *http.Reque
 		},
 	})
 }
+
+func writeInvitationActionError(w http.ResponseWriter, err error) {
+	switch err.Error() {
+	case "invalid invitation token", "invalid user ID":
+		http.Error(w, `{"error":"invalid invitation data"}`, http.StatusBadRequest)
+
+	case "invitation not found":
+		http.Error(w, `{"error":"invitation not found"}`, http.StatusNotFound)
+
+	case "invitation does not belong to this user",
+		"invitation belongs to another user":
+		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+	case "invitation is not pending",
+		"user is already a workspace member":
+		http.Error(w, `{"error":"invitation conflict"}`, http.StatusConflict)
+
+	case "invitation has expired":
+		http.Error(w, `{"error":"invitation expired"}`, http.StatusGone)
+
+	default:
+		http.Error(w, `{"error":"invitation operation failed"}`, http.StatusInternalServerError)
+	}
+}
+
+func (h *WorkspaceHandler) AcceptInvitation(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	token := chi.URLParam(r, "token")
+
+	invitation, err := h.workspaceService.AcceptInvitation(
+		r.Context(),
+		token,
+		userID,
+	)
+	if err != nil {
+		writeInvitationActionError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Invitation accepted successfully",
+		"invitation": map[string]interface{}{
+			"id":           invitation.ID.String(),
+			"workspace_id": invitation.WorkspaceID.String(),
+			"email":        invitation.Email.String,
+			"role":         invitation.Role,
+			"status":       invitation.Status,
+		},
+	})
+}
+
+func (h *WorkspaceHandler) RejectInvitation(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	token := chi.URLParam(r, "token")
+
+	invitation, err := h.workspaceService.RejectInvitation(
+		r.Context(),
+		token,
+		userID,
+	)
+	if err != nil {
+		writeInvitationActionError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Invitation rejected successfully",
+		"invitation": map[string]interface{}{
+			"id":           invitation.ID.String(),
+			"workspace_id": invitation.WorkspaceID.String(),
+			"email":        invitation.Email.String,
+			"role":         invitation.Role,
+			"status":       invitation.Status,
+		},
+	})
+}
+
+func (h *WorkspaceHandler) ListInvitations(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+
+	invitations, err := h.workspaceService.ListWorkspaceInvitations(
+		r.Context(),
+		workspaceID,
+		userID,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID", "invalid user ID":
+			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
+
+		case "user is not a workspace member",
+			"you do not have permission to view invitations":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		default:
+			http.Error(w, `{"error":"could not list invitations"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	items := make([]map[string]interface{}, 0, len(invitations))
+
+	for _, invitation := range invitations {
+		var inviteeID interface{}
+
+		if invitation.InviteeUserID.Valid {
+			inviteeID = invitation.InviteeUserID.String()
+		}
+
+		items = append(items, map[string]interface{}{
+			"id":              invitation.ID.String(),
+			"workspace_id":    invitation.WorkspaceID.String(),
+			"inviter_user_id": invitation.InviterUserID.String(),
+			"invitee_user_id": inviteeID,
+			"email":           invitation.Email.String,
+			"role":            invitation.Role,
+			"status":          invitation.Status,
+			"expires_at":      invitation.ExpiresAt.Time,
+			"created_at":      invitation.CreatedAt.Time,
+		})
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"invitations": items,
+	})
+}
+
+func (h *WorkspaceHandler) CancelInvitation(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+	invitationID := chi.URLParam(r, "invitationID")
+
+	invitation, err := h.workspaceService.CancelInvitation(
+		r.Context(),
+		workspaceID,
+		invitationID,
+		userID,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID", "invalid invitation ID", "invalid user ID":
+			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
+
+		case "user is not a workspace member",
+			"you do not have permission to cancel invitations":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		case "invitation not found or not pending":
+			http.Error(w, `{"error":"invitation conflict"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not cancel invitation"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Invitation cancelled successfully",
+		"invitation": map[string]interface{}{
+			"id":           invitation.ID.String(),
+			"workspace_id": invitation.WorkspaceID.String(),
+			"email":        invitation.Email.String,
+			"role":         invitation.Role,
+			"status":       invitation.Status,
+		},
+	})
+}

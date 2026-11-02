@@ -37,7 +37,7 @@ SELECT
     created_at,
     updated_at
 FROM users
-WHERE email = $1
+WHERE LOWER(email) = LOWER($1)
 LIMIT 1;
 
 -- name: GetUserByUsername :one
@@ -69,3 +69,5 @@ SELECT
 FROM users
 WHERE id = $1
 LIMIT 1;
+
+

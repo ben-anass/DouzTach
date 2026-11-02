@@ -11,6 +11,52 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const acceptWorkspaceInvitation = `-- name: AcceptWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'accepted',
+    invitee_user_id = $1,
+    updated_at = NOW()
+WHERE id = $2
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+`
+
+type AcceptWorkspaceInvitationParams struct {
+	InviteeUserID pgtype.UUID `json:"invitee_user_id"`
+	ID            pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) AcceptWorkspaceInvitation(ctx context.Context, arg AcceptWorkspaceInvitationParams) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, acceptWorkspaceInvitation, arg.InviteeUserID, arg.ID)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const addWorkspaceMember = `-- name: AddWorkspaceMember :one
 INSERT INTO workspace_members (
     workspace_id,
@@ -43,6 +89,52 @@ func (q *Queries) AddWorkspaceMember(ctx context.Context, arg AddWorkspaceMember
 		&i.UserID,
 		&i.Role,
 		&i.JoinedAt,
+	)
+	return i, err
+}
+
+const cancelWorkspaceInvitation = `-- name: CancelWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'cancelled',
+    updated_at = NOW()
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+`
+
+type CancelWorkspaceInvitationParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) CancelWorkspaceInvitation(ctx context.Context, arg CancelWorkspaceInvitationParams) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, cancelWorkspaceInvitation, arg.ID, arg.WorkspaceID)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -179,6 +271,46 @@ func (q *Queries) CreateWorkspaceInvitation(ctx context.Context, arg CreateWorks
 	return i, err
 }
 
+const expireWorkspaceInvitation = `-- name: ExpireWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'expired',
+    updated_at = NOW()
+WHERE id = $1
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+`
+
+func (q *Queries) ExpireWorkspaceInvitation(ctx context.Context, id pgtype.UUID) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, expireWorkspaceInvitation, id)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
 SELECT
     id,
@@ -262,6 +394,44 @@ func (q *Queries) GetWorkspaceInvitationByEmail(ctx context.Context, arg GetWork
 	return i, err
 }
 
+const getWorkspaceInvitationByToken = `-- name: GetWorkspaceInvitationByToken :one
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE token = $1
+LIMIT 1
+FOR UPDATE
+`
+
+func (q *Queries) GetWorkspaceInvitationByToken(ctx context.Context, token pgtype.UUID) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceInvitationByToken, token)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceMemberRole = `-- name: GetWorkspaceMemberRole :one
 SELECT role
 FROM workspace_members
@@ -301,6 +471,56 @@ func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberPa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const listWorkspaceInvitations = `-- name: ListWorkspaceInvitations :many
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListWorkspaceInvitations(ctx context.Context, workspaceID pgtype.UUID) ([]WorkspaceInvitation, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceInvitations, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkspaceInvitation
+	for rows.Next() {
+		var i WorkspaceInvitation
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.InviterUserID,
+			&i.InviteeUserID,
+			&i.Email,
+			&i.Role,
+			&i.Status,
+			&i.Token,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listWorkspaceMembers = `-- name: ListWorkspaceMembers :many
@@ -392,4 +612,44 @@ func (q *Queries) ListWorkspacesForUser(ctx context.Context, userID pgtype.UUID)
 		return nil, err
 	}
 	return items, nil
+}
+
+const rejectWorkspaceInvitation = `-- name: RejectWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'rejected',
+    updated_at = NOW()
+WHERE id = $1
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+`
+
+func (q *Queries) RejectWorkspaceInvitation(ctx context.Context, id pgtype.UUID) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, rejectWorkspaceInvitation, id)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
