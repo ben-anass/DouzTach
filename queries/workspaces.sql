@@ -96,3 +96,58 @@ SELECT EXISTS (
     WHERE workspace_id = sqlc.arg(workspace_id)
       AND user_id = sqlc.arg(user_id)
 );
+-- name: CreateWorkspaceInvitation :one
+INSERT INTO workspace_invitations (
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    expires_at
+)
+VALUES (
+    sqlc.arg(workspace_id),
+    sqlc.arg(inviter_user_id),
+    sqlc.narg(invitee_user_id),
+    sqlc.arg(email),
+    sqlc.arg(role),
+    sqlc.arg(expires_at)
+)
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at;
+
+-- name: GetWorkspaceMemberRole :one
+SELECT role
+FROM workspace_members
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND user_id = sqlc.arg(user_id)
+LIMIT 1;
+
+-- name: GetWorkspaceInvitationByEmail :one
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE workspace_id = sqlc.arg(workspace_id)
+  AND LOWER(email) = LOWER(sqlc.arg(email))
+  AND status = 'pending'
+LIMIT 1;
