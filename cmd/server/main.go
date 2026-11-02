@@ -4,17 +4,17 @@ import (
 	"context"
 	"log"
 	"net/http"
-
 	"os"
 
-	"github.com/ben-anass/DouzTach/internal/auth"
 	"github.com/joho/godotenv"
 
+	"github.com/ben-anass/DouzTach/internal/auth"
 	"github.com/ben-anass/DouzTach/internal/database"
 	"github.com/ben-anass/DouzTach/internal/repository"
 	"github.com/ben-anass/DouzTach/server/api/handlers"
 	"github.com/ben-anass/DouzTach/server/api/routes"
 	"github.com/ben-anass/DouzTach/server/users"
+	"github.com/ben-anass/DouzTach/server/workspaces"
 )
 
 func main() {
@@ -33,13 +33,16 @@ func main() {
 	defer db.Close()
 
 	log.Println("Database connected successfully!")
+
 	// Initialize database queries
 	queries := repository.New(db)
-
 	log.Println("Database queries initialized:", queries != nil)
 
 	// Initialize user service
 	userService := users.NewService(queries)
+
+	// Initialize workspace service
+	workspaceService := workspaces.NewService(queries, db)
 
 	// Initialize JWT service
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -49,11 +52,17 @@ func main() {
 
 	jwtService := auth.NewJWTService(jwtSecret)
 
-	// Initialize authentication handler
+	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(userService, jwtService)
+	workspaceHandler := handlers.NewWorkspaceHandler(workspaceService)
 
 	// Initialize API routes
-	router := routes.NewRouter(authHandler, jwtService, userService)
+	router := routes.NewRouter(
+		authHandler,
+		workspaceHandler,
+		jwtService,
+		userService,
+	)
 
 	// Start HTTP server
 	port := ":8080"

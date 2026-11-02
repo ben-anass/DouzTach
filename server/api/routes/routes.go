@@ -12,6 +12,7 @@ import (
 
 func NewRouter(
 	authHandler *handlers.AuthHandler,
+	workspaceHandler *handlers.WorkspaceHandler,
 	jwtService *auth.JWTService,
 	userService *users.Service,
 ) http.Handler {
@@ -21,6 +22,7 @@ func NewRouter(
 	r.Get("/health", healthHandler)
 
 	r.Route("/api/v1", func(r chi.Router) {
+
 		// Public routes
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/register", authHandler.Register)
@@ -31,6 +33,14 @@ func NewRouter(
 		r.With(jwtService.Middleware).Get("/me", func(w http.ResponseWriter, r *http.Request) {
 			meHandler(userService, w, r)
 		})
+
+		r.With(jwtService.Middleware).Post("/workspaces", workspaceHandler.Create)
+		r.With(jwtService.Middleware).Get("/workspaces", workspaceHandler.List)
+
+		r.With(jwtService.Middleware).Get(
+			"/workspaces/{workspaceID}/members",
+			workspaceHandler.ListMembers,
+		)
 	})
 
 	return r
