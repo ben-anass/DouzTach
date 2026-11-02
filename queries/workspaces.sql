@@ -151,3 +151,122 @@ WHERE workspace_id = sqlc.arg(workspace_id)
   AND LOWER(email) = LOWER(sqlc.arg(email))
   AND status = 'pending'
 LIMIT 1;
+
+-- name: GetWorkspaceInvitationByToken :one
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE token = sqlc.arg(token)
+LIMIT 1
+FOR UPDATE;
+
+
+-- name: AcceptWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'accepted',
+    invitee_user_id = sqlc.arg(invitee_user_id),
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at;
+
+
+-- name: RejectWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'rejected',
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at;
+
+-- name: ExpireWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'expired',
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at;
+
+-- name: ListWorkspaceInvitations :many
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE workspace_id = sqlc.arg(workspace_id)
+ORDER BY created_at DESC;
+
+-- name: CancelWorkspaceInvitation :one
+UPDATE workspace_invitations
+SET
+    status = 'cancelled',
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)
+  AND workspace_id = sqlc.arg(workspace_id)
+  AND status = 'pending'
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at;
