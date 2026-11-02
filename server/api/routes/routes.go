@@ -45,6 +45,28 @@ func NewRouter(
 			"/workspaces/{workspaceID}/invitations",
 			workspaceHandler.CreateInvitation,
 		)
+		// Cancel workspace invitation
+		r.With(jwtService.Middleware).Delete(
+			"/workspaces/{workspaceID}/invitations/{invitationID}",
+			workspaceHandler.CancelInvitation,
+		)
+
+		// List workspace invitations
+		r.With(jwtService.Middleware).Get(
+			"/workspaces/{workspaceID}/invitations",
+			workspaceHandler.ListInvitations,
+		)
+		// Accept workspace invitation
+		r.With(jwtService.Middleware).Post(
+			"/invitations/{token}/accept",
+			workspaceHandler.AcceptInvitation,
+		)
+
+		// Reject workspace invitation
+		r.With(jwtService.Middleware).Post(
+			"/invitations/{token}/reject",
+			workspaceHandler.RejectInvitation,
+		)
 	})
 
 	return r

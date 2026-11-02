@@ -268,3 +268,299 @@ func (s *Service) CreateInvitation(
 
 	return invitation, nil
 }
+
+func getInvitationForUser(
+	ctx context.Context,
+	q *repository.Queries,
+	token string,
+	userID string,
+) (repository.WorkspaceInvitation, pgtype.UUID, error) {
+
+	var tokenUUID pgtype.UUID
+	if err := tokenUUID.Scan(token); err != nil {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invalid invitation token")
+	}
+
+	var userUUID pgtype.UUID
+	if err := userUUID.Scan(userID); err != nil {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invalid user ID")
+	}
+
+	invitation, err := q.GetWorkspaceInvitationByToken(ctx, tokenUUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation not found")
+	}
+	if err != nil {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, fmt.Errorf("get invitation: %w", err)
+	}
+
+	if invitation.Status != "pending" {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation is not pending")
+	}
+
+	user, err := q.GetUserByID(ctx, userUUID)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, fmt.Errorf("get user: %w", err)
+	}
+
+	if !invitation.Email.Valid ||
+		!strings.EqualFold(strings.TrimSpace(invitation.Email.String), strings.TrimSpace(user.Email)) {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation does not belong to this user")
+	}
+
+	if invitation.InviteeUserID.Valid &&
+		invitation.InviteeUserID.Bytes != userUUID.Bytes {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation belongs to another user")
+	}
+
+	return invitation, userUUID, nil
+}
+
+func (s *Service) AcceptInvitation(
+	ctx context.Context,
+	token string,
+	userID string,
+) (repository.WorkspaceInvitation, error) {
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	invitation, userUUID, err := getInvitationForUser(ctx, qtx, token, userID)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, err
+	}
+
+	if !invitation.ExpiresAt.Valid {
+		return repository.WorkspaceInvitation{}, errors.New("invitation expiry is invalid")
+	}
+
+	if !time.Now().Before(invitation.ExpiresAt.Time) {
+		_, err := qtx.ExpireWorkspaceInvitation(ctx, invitation.ID)
+		if err != nil {
+			return repository.WorkspaceInvitation{}, fmt.Errorf("expire invitation: %w", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return repository.WorkspaceInvitation{}, fmt.Errorf("commit expired invitation: %w", err)
+		}
+
+		return repository.WorkspaceInvitation{}, errors.New("invitation has expired")
+	}
+
+	isMember, err := qtx.IsWorkspaceMember(ctx, repository.IsWorkspaceMemberParams{
+		WorkspaceID: invitation.WorkspaceID,
+		UserID:      userUUID,
+	})
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("check workspace membership: %w", err)
+	}
+
+	if isMember {
+		return repository.WorkspaceInvitation{}, errors.New("user is already a workspace member")
+	}
+
+	_, err = qtx.AddWorkspaceMember(ctx, repository.AddWorkspaceMemberParams{
+		WorkspaceID: invitation.WorkspaceID,
+		UserID:      userUUID,
+		Role:        invitation.Role,
+	})
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("add workspace member: %w", err)
+	}
+
+	accepted, err := qtx.AcceptWorkspaceInvitation(ctx, repository.AcceptWorkspaceInvitationParams{
+		InviteeUserID: userUUID,
+		ID:            invitation.ID,
+	})
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("accept invitation: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("commit invitation acceptance: %w", err)
+	}
+
+	return accepted, nil
+}
+
+func (s *Service) RejectInvitation(
+	ctx context.Context,
+	token string,
+	userID string,
+) (repository.WorkspaceInvitation, error) {
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	invitation, _, err := getInvitationForUser(ctx, qtx, token, userID)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, err
+	}
+
+	if !invitation.ExpiresAt.Valid {
+		return repository.WorkspaceInvitation{}, errors.New("invitation expiry is invalid")
+	}
+
+	if !time.Now().Before(invitation.ExpiresAt.Time) {
+		_, err := qtx.ExpireWorkspaceInvitation(ctx, invitation.ID)
+		if err != nil {
+			return repository.WorkspaceInvitation{}, fmt.Errorf("expire invitation: %w", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return repository.WorkspaceInvitation{}, fmt.Errorf("commit expired invitation: %w", err)
+		}
+
+		return repository.WorkspaceInvitation{}, errors.New("invitation has expired")
+	}
+
+	rejected, err := qtx.RejectWorkspaceInvitation(ctx, invitation.ID)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("reject invitation: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("commit invitation rejection: %w", err)
+	}
+
+	return rejected, nil
+}
+
+func (s *Service) ListWorkspaceInvitations(
+	ctx context.Context,
+	workspaceID string,
+	userID string,
+) ([]repository.WorkspaceInvitation, error) {
+
+	var workspaceUUID pgtype.UUID
+	var userUUID pgtype.UUID
+
+	if err := workspaceUUID.Scan(workspaceID); err != nil {
+		return nil, errors.New("invalid workspace ID")
+	}
+
+	if err := userUUID.Scan(userID); err != nil {
+		return nil, errors.New("invalid user ID")
+	}
+
+	// Check the user's workspace role.
+	memberRole, err := s.queries.GetWorkspaceMemberRole(
+		ctx,
+		repository.GetWorkspaceMemberRoleParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      userUUID,
+		},
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errors.New("user is not a workspace member")
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("get workspace member role: %w", err)
+	}
+
+	if memberRole != "owner" && memberRole != "admin" {
+		return nil, errors.New("you do not have permission to view invitations")
+	}
+
+	invitations, err := s.queries.ListWorkspaceInvitations(
+		ctx,
+		workspaceUUID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace invitations: %w", err)
+	}
+
+	if invitations == nil {
+		return []repository.WorkspaceInvitation{}, nil
+	}
+
+	return invitations, nil
+}
+
+func (s *Service) CancelInvitation(
+	ctx context.Context,
+	workspaceID string,
+	invitationID string,
+	userID string,
+) (repository.WorkspaceInvitation, error) {
+
+	var workspaceUUID pgtype.UUID
+	var invitationUUID pgtype.UUID
+	var userUUID pgtype.UUID
+
+	if err := workspaceUUID.Scan(workspaceID); err != nil {
+		return repository.WorkspaceInvitation{}, errors.New("invalid workspace ID")
+	}
+
+	if err := invitationUUID.Scan(invitationID); err != nil {
+		return repository.WorkspaceInvitation{}, errors.New("invalid invitation ID")
+	}
+
+	if err := userUUID.Scan(userID); err != nil {
+		return repository.WorkspaceInvitation{}, errors.New("invalid user ID")
+	}
+
+	// Check inviter permissions.
+	memberRole, err := s.queries.GetWorkspaceMemberRole(
+		ctx,
+		repository.GetWorkspaceMemberRoleParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      userUUID,
+		},
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, errors.New("user is not a workspace member")
+	}
+
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"get workspace member role: %w", err,
+		)
+	}
+
+	if memberRole != "owner" && memberRole != "admin" {
+		return repository.WorkspaceInvitation{}, errors.New(
+			"you do not have permission to cancel invitations",
+		)
+	}
+
+	// Cancel only a pending invitation belonging to this workspace.
+	invitation, err := s.queries.CancelWorkspaceInvitation(
+		ctx,
+		repository.CancelWorkspaceInvitationParams{
+			ID:          invitationUUID,
+			WorkspaceID: workspaceUUID,
+		},
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, errors.New(
+			"invitation not found or not pending",
+		)
+	}
+
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"cancel workspace invitation: %w", err,
+		)
+	}
+
+	return invitation, nil
+}
