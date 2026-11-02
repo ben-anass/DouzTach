@@ -41,6 +41,10 @@ func NewRouter(
 			"/workspaces/{workspaceID}/members",
 			workspaceHandler.ListMembers,
 		)
+		r.With(jwtService.Middleware).Post(
+			"/workspaces/{workspaceID}/invitations",
+			workspaceHandler.CreateInvitation,
+		)
 	})
 
 	return r

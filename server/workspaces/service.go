@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ben-anass/DouzTach/internal/repository"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -142,4 +144,127 @@ func (s *Service) ListWorkspaceMembers(ctx context.Context, workspaceID, userID 
 	}
 
 	return members, nil
+}
+
+func (s *Service) CreateInvitation(
+	ctx context.Context,
+	workspaceID string,
+	inviterUserID string,
+	inviteeEmail string,
+	role string,
+) (repository.WorkspaceInvitation, error) {
+
+	inviteeEmail = strings.TrimSpace(strings.ToLower(inviteeEmail))
+	role = strings.TrimSpace(role)
+
+	if inviteeEmail == "" {
+		return repository.WorkspaceInvitation{}, errors.New("invitee email is required")
+	}
+
+	if role != "admin" && role != "member" && role != "viewer" {
+		return repository.WorkspaceInvitation{}, errors.New("invalid invitation role")
+	}
+
+	var workspaceUUID pgtype.UUID
+	var inviterUUID pgtype.UUID
+
+	if err := workspaceUUID.Scan(workspaceID); err != nil {
+		return repository.WorkspaceInvitation{}, errors.New("invalid workspace ID")
+	}
+
+	if err := inviterUUID.Scan(inviterUserID); err != nil {
+		return repository.WorkspaceInvitation{}, errors.New("invalid inviter user ID")
+	}
+
+	// Check inviter permissions.
+	memberRole, err := s.queries.GetWorkspaceMemberRole(
+		ctx,
+		repository.GetWorkspaceMemberRoleParams{
+			WorkspaceID: workspaceUUID,
+			UserID:      inviterUUID,
+		},
+	)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, errors.New("user is not a workspace member")
+	}
+
+	if memberRole != "owner" && memberRole != "admin" {
+		return repository.WorkspaceInvitation{}, errors.New("you do not have permission to invite members")
+	}
+
+	// Check whether the invited user already has an account.
+	var inviteeUUID pgtype.UUID
+
+	invitee, err := s.queries.GetUserByEmail(ctx, inviteeEmail)
+
+	if err == nil {
+		inviteeUUID = invitee.ID
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"find invited user: %w", err,
+		)
+	}
+
+	// Check whether the invited user is already a member.
+	if inviteeUUID.Valid {
+		isMember, err := s.queries.IsWorkspaceMember(
+			ctx,
+			repository.IsWorkspaceMemberParams{
+				WorkspaceID: workspaceUUID,
+				UserID:      inviteeUUID,
+			},
+		)
+		if err != nil {
+			return repository.WorkspaceInvitation{}, fmt.Errorf(
+				"check workspace membership: %w", err,
+			)
+		}
+
+		if isMember {
+			return repository.WorkspaceInvitation{}, errors.New(
+				"user is already a workspace member",
+			)
+		}
+	}
+
+	// Check whether a pending invitation already exists.
+	_, err = s.queries.GetWorkspaceInvitationByEmail(
+		ctx,
+		repository.GetWorkspaceInvitationByEmailParams{
+			WorkspaceID: workspaceUUID,
+			Email:       inviteeEmail,
+		},
+	)
+
+	if err == nil {
+		return repository.WorkspaceInvitation{}, errors.New(
+			"a pending invitation already exists for this email",
+		)
+	}
+
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"check existing invitation: %w", err,
+		)
+	}
+
+	invitation, err := s.queries.CreateWorkspaceInvitation(
+		ctx,
+		repository.CreateWorkspaceInvitationParams{
+			WorkspaceID:   workspaceUUID,
+			InviterUserID: inviterUUID,
+			InviteeUserID: inviteeUUID,
+			Email:         pgtype.Text{String: inviteeEmail, Valid: true},
+			Role:          role,
+			ExpiresAt: pgtype.Timestamptz{
+				Time:  time.Now().Add(7 * 24 * time.Hour),
+				Valid: true,
+			},
+		},
+	)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("create workspace invitation: %w", err)
+	}
+
+	return invitation, nil
 }

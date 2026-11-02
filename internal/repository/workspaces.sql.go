@@ -113,6 +113,72 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 	return i, err
 }
 
+const createWorkspaceInvitation = `-- name: CreateWorkspaceInvitation :one
+INSERT INTO workspace_invitations (
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    expires_at
+)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6
+)
+RETURNING
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+`
+
+type CreateWorkspaceInvitationParams struct {
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	InviterUserID pgtype.UUID        `json:"inviter_user_id"`
+	InviteeUserID pgtype.UUID        `json:"invitee_user_id"`
+	Email         pgtype.Text        `json:"email"`
+	Role          string             `json:"role"`
+	ExpiresAt     pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateWorkspaceInvitation(ctx context.Context, arg CreateWorkspaceInvitationParams) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, createWorkspaceInvitation,
+		arg.WorkspaceID,
+		arg.InviterUserID,
+		arg.InviteeUserID,
+		arg.Email,
+		arg.Role,
+		arg.ExpiresAt,
+	)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
 SELECT
     id,
@@ -150,6 +216,70 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id pgtype.UUID) (Workspa
 		&i.DeletedAt,
 	)
 	return i, err
+}
+
+const getWorkspaceInvitationByEmail = `-- name: GetWorkspaceInvitationByEmail :one
+SELECT
+    id,
+    workspace_id,
+    inviter_user_id,
+    invitee_user_id,
+    email,
+    role,
+    status,
+    token,
+    expires_at,
+    created_at,
+    updated_at
+FROM workspace_invitations
+WHERE workspace_id = $1
+  AND LOWER(email) = LOWER($2)
+  AND status = 'pending'
+LIMIT 1
+`
+
+type GetWorkspaceInvitationByEmailParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Email       string      `json:"email"`
+}
+
+func (q *Queries) GetWorkspaceInvitationByEmail(ctx context.Context, arg GetWorkspaceInvitationByEmailParams) (WorkspaceInvitation, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceInvitationByEmail, arg.WorkspaceID, arg.Email)
+	var i WorkspaceInvitation
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.InviterUserID,
+		&i.InviteeUserID,
+		&i.Email,
+		&i.Role,
+		&i.Status,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getWorkspaceMemberRole = `-- name: GetWorkspaceMemberRole :one
+SELECT role
+FROM workspace_members
+WHERE workspace_id = $1
+  AND user_id = $2
+LIMIT 1
+`
+
+type GetWorkspaceMemberRoleParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetWorkspaceMemberRole(ctx context.Context, arg GetWorkspaceMemberRoleParams) (string, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceMemberRole, arg.WorkspaceID, arg.UserID)
+	var role string
+	err := row.Scan(&role)
+	return role, err
 }
 
 const isWorkspaceMember = `-- name: IsWorkspaceMember :one

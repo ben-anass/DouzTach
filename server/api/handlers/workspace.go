@@ -28,6 +28,11 @@ type CreateWorkspaceRequest struct {
 	Kind        string `json:"kind"`
 }
 
+type CreateInvitationRequest struct {
+	Email string `json:"email"`
+	Role  string `json:"role"`
+}
+
 func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -142,5 +147,69 @@ func (h *WorkspaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"members": members,
+	})
+}
+
+func (h *WorkspaceHandler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	workspaceID := chi.URLParam(r, "workspaceID")
+
+	var req CreateInvitationRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	invitation, err := h.workspaceService.CreateInvitation(
+		r.Context(),
+		workspaceID,
+		userID,
+		req.Email,
+		req.Role,
+	)
+
+	if err != nil {
+		switch err.Error() {
+		case "invitee email is required",
+			"invalid invitation role",
+			"invalid workspace ID",
+			"invalid inviter user ID":
+			http.Error(w, `{"error":"invalid invitation data"}`, http.StatusBadRequest)
+
+		case "user is not a workspace member",
+			"you do not have permission to invite members":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+
+		case "user is already a workspace member",
+			"a pending invitation already exists for this email":
+			http.Error(w, `{"error":"invitation conflict"}`, http.StatusConflict)
+
+		default:
+			http.Error(w, `{"error":"could not create invitation"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "Invitation created successfully",
+		"invitation": map[string]interface{}{
+			"id":           invitation.ID.String(),
+			"workspace_id": invitation.WorkspaceID.String(),
+			"email":        invitation.Email.String,
+			"role":         invitation.Role,
+			"status":       invitation.Status,
+			"token":        invitation.Token.String(),
+			"expires_at":   invitation.ExpiresAt.Time,
+		},
 	})
 }
