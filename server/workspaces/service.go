@@ -225,9 +225,6 @@ func (s *Service) TransferOwnership(
 		ctx,
 		workspaceUUID,
 	)
-	if workspace.DeletedAt.Valid {
-		return repository.Workspace{}, errors.New("workspace is deleted")
-	}
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return repository.Workspace{}, errors.New("workspace not found")
@@ -237,6 +234,10 @@ func (s *Service) TransferOwnership(
 		return repository.Workspace{}, fmt.Errorf(
 			"get workspace: %w", err,
 		)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.Workspace{}, errors.New("workspace is deleted")
 	}
 
 	// Verify current owner.
@@ -255,6 +256,12 @@ func (s *Service) TransferOwnership(
 			UserID:      requesterUUID,
 		},
 	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New(
+			"workspace owner membership is inconsistent",
+		)
+	}
 
 	if err != nil {
 		return repository.Workspace{}, fmt.Errorf(
@@ -461,13 +468,13 @@ func (s *Service) UpdateWorkspace(
 	}
 
 	// Validate ownership consistency.
-	if requesterRole == "owner" {
-		if !workspace.OwnerUserID.Valid ||
-			workspace.OwnerUserID.Bytes != requesterUUID.Bytes {
-			return repository.Workspace{}, errors.New(
-				"workspace owner membership is inconsistent",
-			)
-		}
+	isOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == requesterUUID.Bytes
+
+	if (requesterRole == "owner") != isOwner {
+		return repository.Workspace{}, errors.New(
+			"workspace owner membership is inconsistent",
+		)
 	}
 
 	// Only Owner and Admin can update workspace.
@@ -704,10 +711,13 @@ func (s *Service) RemoveMember(
 	}
 
 	// Verify owner consistency.
-	if requesterRole == "owner" &&
-		(!workspace.OwnerUserID.Valid ||
-			workspace.OwnerUserID.Bytes != requesterUUID.Bytes) {
-		return repository.WorkspaceMember{}, errors.New("workspace ownership is inconsistent")
+	isOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == requesterUUID.Bytes
+
+	if (requesterRole == "owner") != isOwner {
+		return repository.WorkspaceMember{}, errors.New(
+			"workspace ownership is inconsistent",
+		)
 	}
 
 	// Lock target membership.
@@ -727,8 +737,20 @@ func (s *Service) RemoveMember(
 		return repository.WorkspaceMember{}, fmt.Errorf("get target role: %w", err)
 	}
 
+	// Verify target owner consistency.
+	targetIsOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == targetUUID.Bytes
+
+	if (targetRole == "owner") != targetIsOwner {
+		return repository.WorkspaceMember{}, errors.New(
+			"workspace ownership is inconsistent",
+		)
+	}
+
 	if targetRole == "owner" {
-		return repository.WorkspaceMember{}, errors.New("cannot remove workspace owner")
+		return repository.WorkspaceMember{}, errors.New(
+			"cannot remove workspace owner",
+		)
 	}
 
 	// Check permissions.
@@ -1097,26 +1119,67 @@ func (s *Service) CreateInvitation(
 		return repository.WorkspaceInvitation{}, errors.New("invalid inviter user ID")
 	}
 
-	// Check inviter permissions.
-	memberRole, err := s.queries.GetWorkspaceMemberRole(
+	// Begin transaction.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("begin transaction: %w", err)
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	// 1. Lock workspace first.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(ctx, workspaceUUID)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("get workspace: %w", err)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.WorkspaceInvitation{}, errors.New("workspace is deleted")
+	}
+
+	// 2. Lock inviter membership.
+	memberRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
 		ctx,
-		repository.GetWorkspaceMemberRoleParams{
+		repository.GetWorkspaceMemberRoleForUpdateParams{
 			WorkspaceID: workspaceUUID,
 			UserID:      inviterUUID,
 		},
 	)
-	if err != nil {
+
+	if errors.Is(err, pgx.ErrNoRows) {
 		return repository.WorkspaceInvitation{}, errors.New("user is not a workspace member")
 	}
 
-	if memberRole != "owner" && memberRole != "admin" {
-		return repository.WorkspaceInvitation{}, errors.New("you do not have permission to invite members")
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("get inviter role: %w", err)
 	}
 
-	// Check whether the invited user already has an account.
+	isOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == inviterUUID.Bytes
+
+	if (memberRole == "owner") != isOwner {
+		return repository.WorkspaceInvitation{}, errors.New("workspace ownership is inconsistent")
+	}
+
+	if memberRole != "owner" && memberRole != "admin" {
+		return repository.WorkspaceInvitation{}, errors.New(
+			"you do not have permission to invite members",
+		)
+	}
+
+	// 3. Check invited user's account.
 	var inviteeUUID pgtype.UUID
 
-	invitee, err := s.queries.GetUserByEmail(ctx, inviteeEmail)
+	invitee, err := qtx.GetUserByEmail(ctx, inviteeEmail)
 
 	if err == nil {
 		inviteeUUID = invitee.ID
@@ -1126,15 +1189,16 @@ func (s *Service) CreateInvitation(
 		)
 	}
 
-	// Check whether the invited user is already a member.
+	// 4. Prevent inviting existing members.
 	if inviteeUUID.Valid {
-		isMember, err := s.queries.IsWorkspaceMember(
+		isMember, err := qtx.IsWorkspaceMember(
 			ctx,
 			repository.IsWorkspaceMemberParams{
 				WorkspaceID: workspaceUUID,
 				UserID:      inviteeUUID,
 			},
 		)
+
 		if err != nil {
 			return repository.WorkspaceInvitation{}, fmt.Errorf(
 				"check workspace membership: %w", err,
@@ -1148,8 +1212,8 @@ func (s *Service) CreateInvitation(
 		}
 	}
 
-	// Check whether a pending invitation already exists.
-	_, err = s.queries.GetWorkspaceInvitationByEmail(
+	// 5. Prevent duplicate pending invitations.
+	_, err = qtx.GetWorkspaceInvitationByEmail(
 		ctx,
 		repository.GetWorkspaceInvitationByEmailParams{
 			WorkspaceID: workspaceUUID,
@@ -1169,22 +1233,36 @@ func (s *Service) CreateInvitation(
 		)
 	}
 
-	invitation, err := s.queries.CreateWorkspaceInvitation(
+	// 6. Create invitation.
+	invitation, err := qtx.CreateWorkspaceInvitation(
 		ctx,
 		repository.CreateWorkspaceInvitationParams{
 			WorkspaceID:   workspaceUUID,
 			InviterUserID: inviterUUID,
 			InviteeUserID: inviteeUUID,
-			Email:         pgtype.Text{String: inviteeEmail, Valid: true},
-			Role:          role,
+			Email: pgtype.Text{
+				String: inviteeEmail,
+				Valid:  true,
+			},
+			Role: role,
 			ExpiresAt: pgtype.Timestamptz{
 				Time:  time.Now().Add(7 * 24 * time.Hour),
 				Valid: true,
 			},
 		},
 	)
+
 	if err != nil {
-		return repository.WorkspaceInvitation{}, fmt.Errorf("create workspace invitation: %w", err)
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"create workspace invitation: %w", err,
+		)
+	}
+
+	// 7. Commit.
+	if err := tx.Commit(ctx); err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"commit invitation creation: %w", err,
+		)
 	}
 
 	return invitation, nil
@@ -1198,40 +1276,103 @@ func getInvitationForUser(
 ) (repository.WorkspaceInvitation, pgtype.UUID, error) {
 
 	var tokenUUID pgtype.UUID
+
 	if err := tokenUUID.Scan(token); err != nil {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invalid invitation token")
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invalid invitation token")
 	}
 
 	var userUUID pgtype.UUID
+
 	if err := userUUID.Scan(userID); err != nil {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invalid user ID")
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invalid user ID")
 	}
 
-	invitation, err := q.GetWorkspaceInvitationByToken(ctx, tokenUUID)
+	// 1. Read invitation without locking.
+	initialInvitation, err := q.GetWorkspaceInvitationByToken(
+		ctx,
+		tokenUUID,
+	)
+
 	if errors.Is(err, pgx.ErrNoRows) {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation not found")
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invitation not found")
 	}
+
 	if err != nil {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, fmt.Errorf("get invitation: %w", err)
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			fmt.Errorf("get invitation: %w", err)
+	}
+
+	// 2. Lock workspace first.
+	workspace, err := q.GetWorkspaceByIDForUpdate(
+		ctx,
+		initialInvitation.WorkspaceID,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			fmt.Errorf("get workspace: %w", err)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("workspace is deleted")
+	}
+
+	// 3. Lock and reload invitation.
+	invitation, err := q.GetWorkspaceInvitationByTokenForUpdate(
+		ctx,
+		tokenUUID,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invitation not found")
+	}
+
+	if err != nil {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			fmt.Errorf("lock invitation: %w", err)
+	}
+
+	if invitation.WorkspaceID.Bytes != initialInvitation.WorkspaceID.Bytes {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invitation not found")
 	}
 
 	if invitation.Status != "pending" {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation is not pending")
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invitation is not pending")
 	}
 
+	// 4. Verify invited user.
 	user, err := q.GetUserByID(ctx, userUUID)
+
 	if err != nil {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, fmt.Errorf("get user: %w", err)
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			fmt.Errorf("get user: %w", err)
 	}
 
 	if !invitation.Email.Valid ||
-		!strings.EqualFold(strings.TrimSpace(invitation.Email.String), strings.TrimSpace(user.Email)) {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation does not belong to this user")
+		!strings.EqualFold(
+			strings.TrimSpace(invitation.Email.String),
+			strings.TrimSpace(user.Email),
+		) {
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invitation does not belong to this user")
 	}
 
 	if invitation.InviteeUserID.Valid &&
 		invitation.InviteeUserID.Bytes != userUUID.Bytes {
-		return repository.WorkspaceInvitation{}, pgtype.UUID{}, errors.New("invitation belongs to another user")
+		return repository.WorkspaceInvitation{}, pgtype.UUID{},
+			errors.New("invitation belongs to another user")
 	}
 
 	return invitation, userUUID, nil
@@ -1377,6 +1518,13 @@ func (s *Service) ListWorkspaceInvitations(
 	if err := userUUID.Scan(userID); err != nil {
 		return nil, errors.New("invalid user ID")
 	}
+	if err := ensureWorkspaceActive(
+		ctx,
+		s.queries,
+		workspaceUUID,
+	); err != nil {
+		return nil, err
+	}
 
 	// Check the user's workspace role.
 	memberRole, err := s.queries.GetWorkspaceMemberRole(
@@ -1437,17 +1585,53 @@ func (s *Service) CancelInvitation(
 		return repository.WorkspaceInvitation{}, errors.New("invalid user ID")
 	}
 
-	// Check inviter permissions.
-	memberRole, err := s.queries.GetWorkspaceMemberRole(
+	// Begin transaction.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"begin transaction: %w", err,
+		)
+	}
+
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	qtx := s.queries.WithTx(tx)
+
+	// 1. Lock workspace first.
+	workspace, err := qtx.GetWorkspaceByIDForUpdate(
 		ctx,
-		repository.GetWorkspaceMemberRoleParams{
+		workspaceUUID,
+	)
+
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.WorkspaceInvitation{}, errors.New("workspace not found")
+	}
+
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"get workspace: %w", err,
+		)
+	}
+
+	if workspace.DeletedAt.Valid {
+		return repository.WorkspaceInvitation{}, errors.New("workspace is deleted")
+	}
+
+	// 2. Lock requester membership.
+	memberRole, err := qtx.GetWorkspaceMemberRoleForUpdate(
+		ctx,
+		repository.GetWorkspaceMemberRoleForUpdateParams{
 			WorkspaceID: workspaceUUID,
 			UserID:      userUUID,
 		},
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		return repository.WorkspaceInvitation{}, errors.New("user is not a workspace member")
+		return repository.WorkspaceInvitation{}, errors.New(
+			"user is not a workspace member",
+		)
 	}
 
 	if err != nil {
@@ -1456,14 +1640,25 @@ func (s *Service) CancelInvitation(
 		)
 	}
 
+	// 3. Verify owner consistency.
+	isOwner := workspace.OwnerUserID.Valid &&
+		workspace.OwnerUserID.Bytes == userUUID.Bytes
+
+	if (memberRole == "owner") != isOwner {
+		return repository.WorkspaceInvitation{}, errors.New(
+			"workspace ownership is inconsistent",
+		)
+	}
+
+	// 4. Only owner and admin can cancel invitations.
 	if memberRole != "owner" && memberRole != "admin" {
 		return repository.WorkspaceInvitation{}, errors.New(
 			"you do not have permission to cancel invitations",
 		)
 	}
 
-	// Cancel only a pending invitation belonging to this workspace.
-	invitation, err := s.queries.CancelWorkspaceInvitation(
+	// 5. Cancel pending invitation.
+	invitation, err := qtx.CancelWorkspaceInvitation(
 		ctx,
 		repository.CancelWorkspaceInvitationParams{
 			ID:          invitationUUID,
@@ -1480,6 +1675,13 @@ func (s *Service) CancelInvitation(
 	if err != nil {
 		return repository.WorkspaceInvitation{}, fmt.Errorf(
 			"cancel workspace invitation: %w", err,
+		)
+	}
+
+	// 6. Commit transaction.
+	if err := tx.Commit(ctx); err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf(
+			"commit invitation cancellation: %w", err,
 		)
 	}
 
