@@ -126,18 +126,19 @@ func (h *WorkspaceHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
 		userID,
 	)
 	if err != nil {
-		if err.Error() == "invalid workspace ID" ||
-			err.Error() == "invalid user ID" {
+		switch err.Error() {
+		case "invalid workspace ID", "invalid user ID":
 			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
-			return
-		}
 
-		if err.Error() == "user is not a workspace member" {
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "user is not a workspace member":
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
-			return
-		}
 
-		http.Error(w, `{"error":"could not list workspace members"}`, http.StatusInternalServerError)
+		default:
+			http.Error(w, `{"error":"could not list workspace members"}`, http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -192,6 +193,12 @@ func (h *WorkspaceHandler) CreateInvitation(w http.ResponseWriter, r *http.Reque
 			"a pending invitation already exists for this email":
 			http.Error(w, `{"error":"invitation conflict"}`, http.StatusConflict)
 
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "workspace ownership is inconsistent":
+			http.Error(w, `{"error":"workspace ownership conflict"}`, http.StatusConflict)
+
 		default:
 			http.Error(w, `{"error":"could not create invitation"}`, http.StatusInternalServerError)
 		}
@@ -232,6 +239,9 @@ func writeInvitationActionError(w http.ResponseWriter, err error) {
 
 	case "invitation has expired":
 		http.Error(w, `{"error":"invitation expired"}`, http.StatusGone)
+
+	case "workspace not found", "workspace is deleted":
+		http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
 
 	default:
 		http.Error(w, `{"error":"invitation operation failed"}`, http.StatusInternalServerError)
@@ -330,6 +340,9 @@ func (h *WorkspaceHandler) ListInvitations(w http.ResponseWriter, r *http.Reques
 		case "invalid workspace ID", "invalid user ID":
 			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
 
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
 		case "user is not a workspace member",
 			"you do not have permission to view invitations":
 			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
@@ -398,6 +411,12 @@ func (h *WorkspaceHandler) CancelInvitation(w http.ResponseWriter, r *http.Reque
 		case "invitation not found or not pending":
 			http.Error(w, `{"error":"invitation conflict"}`, http.StatusConflict)
 
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "workspace ownership is inconsistent":
+			http.Error(w, `{"error":"workspace ownership conflict"}`, http.StatusConflict)
+
 		default:
 			http.Error(w, `{"error":"could not cancel invitation"}`, http.StatusInternalServerError)
 		}
@@ -459,6 +478,12 @@ func (h *WorkspaceHandler) RemoveMember(w http.ResponseWriter, r *http.Request) 
 			"cannot remove yourself":
 
 			http.Error(w, `{"error":"member removal conflict"}`, http.StatusConflict)
+
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "workspace ownership is inconsistent":
+			http.Error(w, `{"error":"workspace ownership conflict"}`, http.StatusConflict)
 
 		default:
 			http.Error(w, `{"error":"could not remove member"}`, http.StatusInternalServerError)
@@ -529,8 +554,13 @@ func (h *WorkspaceHandler) ChangeMemberRole(w http.ResponseWriter, r *http.Reque
 			http.Error(w, `{"error":"member not found"}`, http.StatusNotFound)
 
 		case "cannot change workspace owner role":
-
 			http.Error(w, `{"error":"cannot change owner role"}`, http.StatusConflict)
+
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "workspace ownership is inconsistent":
+			http.Error(w, `{"error":"workspace ownership conflict"}`, http.StatusConflict)
 
 		default:
 			http.Error(w, `{"error":"could not change member role"}`, http.StatusInternalServerError)
@@ -577,6 +607,12 @@ func (h *WorkspaceHandler) LeaveWorkspace(w http.ResponseWriter, r *http.Request
 
 		case "workspace owner cannot leave before transferring ownership":
 			http.Error(w, `{"error":"transfer ownership before leaving"}`, http.StatusConflict)
+
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+
+		case "workspace ownership is inconsistent":
+			http.Error(w, `{"error":"workspace ownership conflict"}`, http.StatusConflict)
 
 		default:
 			http.Error(w, `{"error":"could not leave workspace"}`, http.StatusInternalServerError)
@@ -629,7 +665,14 @@ func (h *WorkspaceHandler) TransferOwnership(w http.ResponseWriter, r *http.Requ
 			"invalid target user ID":
 			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
 
-		case "workspace not found":
+		case "cannot transfer ownership to yourself":
+			http.Error(
+				w,
+				`{"error":"cannot transfer ownership to yourself"}`,
+				http.StatusBadRequest,
+			)
+
+		case "workspace not found", "workspace is deleted":
 			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
 
 		case "only workspace owner can transfer ownership":
