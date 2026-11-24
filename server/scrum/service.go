@@ -190,6 +190,7 @@ func (s *Service) UpdateEpic(ctx context.Context, input UpdateEpicInput) (reposi
 		if err != nil {
 			return repository.Epic{}, notFound(err)
 		}
+
 		updated, err := q.UpdateEpic(ctx, repository.UpdateEpicParams{
 			ID:          input.EpicID,
 			WorkspaceID: input.WorkspaceID,
