@@ -84,16 +84,14 @@ func ExitCode(err error) int {
 	return ExitFailure
 }
 
-// ReportError writes a single user-facing error line. Pending-contract errors
-// are reported as a warning with the reason, because the client is complete and
-// the missing piece is the backend contract.
+// ReportError writes a single user-facing error line.
 func ReportError(w io.Writer, s styles.Styles, err error) {
 	if err == nil || w == nil {
 		return
 	}
 	if isPending(err) {
 		fmt.Fprintln(w, s.Warning.Render("! "+err.Error()))
-		fmt.Fprintln(w, s.Help.Render("  The client is ready; the backend endpoints are still missing. Run 'douztech doctor' for details."))
+		fmt.Fprintln(w, s.Help.Render("  Configure the API URL or run 'douztech doctor' for details."))
 		return
 	}
 	fmt.Fprintln(w, s.Error.Render("✗ "+err.Error()))

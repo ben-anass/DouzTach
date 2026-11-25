@@ -13,6 +13,10 @@ import (
 func NewRouter(
 	authHandler *handlers.AuthHandler,
 	workspaceHandler *handlers.WorkspaceHandler,
+	scrumHandler *handlers.ScrumHandler,
+	activityHandler *handlers.ActivityHandler,
+	notificationHandler *handlers.NotificationHandler,
+	chatHandler *handlers.ChatHandler,
 	jwtService *auth.JWTService,
 	userService *users.Service,
 ) http.Handler {
@@ -30,75 +34,91 @@ func NewRouter(
 		})
 
 		// Protected routes
-		r.With(jwtService.Middleware).Get("/me", func(w http.ResponseWriter, r *http.Request) {
-			meHandler(userService, w, r)
+		r.Group(func(r chi.Router) {
+			r.Use(jwtService.Middleware)
+
+			r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
+				meHandler(userService, w, r)
+			})
+
+			// Workspaces
+			r.Post("/workspaces", workspaceHandler.Create)
+			r.Get("/workspaces", workspaceHandler.List)
+			r.Get("/workspaces/{workspaceID}", workspaceHandler.Get)
+			r.Put("/workspaces/{workspaceID}", workspaceHandler.UpdateWorkspace)
+			r.Delete("/workspaces/{workspaceID}", workspaceHandler.DeleteWorkspace)
+			r.Get("/workspaces/{workspaceID}/members", workspaceHandler.ListMembers)
+			r.Delete("/workspaces/{workspaceID}/members/{userID}", workspaceHandler.RemoveMember)
+			r.Delete("/workspaces/{workspaceID}/leave", workspaceHandler.LeaveWorkspace)
+			r.Post("/workspaces/{workspaceID}/transfer-ownership", workspaceHandler.TransferOwnership)
+			r.Patch("/workspaces/{workspaceID}/members/{userID}/role", workspaceHandler.ChangeMemberRole)
+
+			// Invitations
+			r.Post("/workspaces/{workspaceID}/invitations", workspaceHandler.CreateInvitation)
+			r.Delete("/workspaces/{workspaceID}/invitations/{invitationID}", workspaceHandler.CancelInvitation)
+			r.Get("/workspaces/{workspaceID}/invitations", workspaceHandler.ListInvitations)
+			r.Post("/invitations/{token}/accept", workspaceHandler.AcceptInvitation)
+			r.Post("/invitations/{token}/reject", workspaceHandler.RejectInvitation)
+
+			// Scrum - Epics
+			if scrumHandler != nil {
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/epics", scrumHandler.CreateEpic)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/epics", scrumHandler.ListEpics)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/epics/{epicID}", scrumHandler.GetEpic)
+				r.With(scrumHandler.RequireWorkspaceMember).Put("/workspaces/{workspaceID}/epics/{epicID}", scrumHandler.UpdateEpic)
+				r.With(scrumHandler.RequireWorkspaceMember).Delete("/workspaces/{workspaceID}/epics/{epicID}", scrumHandler.DeleteEpic)
+
+				// Scrum - User Stories
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/stories", scrumHandler.CreateUserStory)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/stories", scrumHandler.ListUserStories)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/stories/{storyID}", scrumHandler.GetUserStory)
+				r.With(scrumHandler.RequireWorkspaceMember).Put("/workspaces/{workspaceID}/stories/{storyID}", scrumHandler.UpdateUserStory)
+				r.With(scrumHandler.RequireWorkspaceMember).Delete("/workspaces/{workspaceID}/stories/{storyID}", scrumHandler.DeleteUserStory)
+
+				// Scrum - Tasks / Work Items
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/tasks", scrumHandler.CreateWorkItem)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/tasks", scrumHandler.ListWorkItems)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/tasks/{itemID}", scrumHandler.GetWorkItem)
+				r.With(scrumHandler.RequireWorkspaceMember).Put("/workspaces/{workspaceID}/tasks/{itemID}", scrumHandler.UpdateWorkItem)
+				r.With(scrumHandler.RequireWorkspaceMember).Delete("/workspaces/{workspaceID}/tasks/{itemID}", scrumHandler.DeleteWorkItem)
+
+				// Scrum - Sprints
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints", scrumHandler.CreateSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/sprints", scrumHandler.ListSprints)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/sprints/{sprintID}", scrumHandler.GetSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Put("/workspaces/{workspaceID}/sprints/{sprintID}", scrumHandler.UpdateSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Delete("/workspaces/{workspaceID}/sprints/{sprintID}", scrumHandler.DeleteSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints/{sprintID}/start", scrumHandler.StartSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints/{sprintID}/complete", scrumHandler.CompleteSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/backlog", scrumHandler.ListBacklog)
+				r.With(scrumHandler.RequireWorkspaceMember).Patch("/workspaces/{workspaceID}/backlog/{storyID}/position", scrumHandler.SetBacklogStoryPosition)
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints/{sprintID}/stories", scrumHandler.AddStoryToSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Delete("/workspaces/{workspaceID}/sprints/{sprintID}/stories/{storyID}", scrumHandler.RemoveStoryFromSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/sprints/{sprintID}/stories", scrumHandler.ListSprintStories)
+				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/sprints/{sprintID}/board", scrumHandler.SprintBoard)
+			}
+
+			// Activity
+			if activityHandler != nil {
+				r.Get("/workspaces/{workspaceID}/activity", activityHandler.ListWorkspaceActivity)
+			}
+
+			// Notifications
+			if notificationHandler != nil {
+				r.Get("/notifications", notificationHandler.ListUserNotifications)
+				r.Post("/notifications/{notificationID}/read", notificationHandler.MarkRead)
+				r.Post("/notifications/read-all", notificationHandler.MarkAllRead)
+			}
+
+			// Chat
+			if chatHandler != nil {
+				r.Post("/workspaces/{workspaceID}/chat/channels", chatHandler.CreateChannel)
+				r.Get("/workspaces/{workspaceID}/chat/channels", chatHandler.ListChannels)
+				r.Post("/workspaces/{workspaceID}/chat/channels/{channelID}/messages", chatHandler.SendMessage)
+				r.Get("/workspaces/{workspaceID}/chat/channels/{channelID}/messages", chatHandler.ListMessages)
+				r.Handle("/workspaces/{workspaceID}/chat/ws", chatHandler.WebSocketHandler())
+			}
 		})
-
-		r.With(jwtService.Middleware).Post("/workspaces", workspaceHandler.Create)
-		r.With(jwtService.Middleware).Get("/workspaces", workspaceHandler.List)
-
-		// Update workspace
-		r.With(jwtService.Middleware).Put(
-			"/workspaces/{workspaceID}",
-			workspaceHandler.UpdateWorkspace,
-		)
-		// Delete workspace (soft delete)
-		r.With(jwtService.Middleware).Delete(
-			"/workspaces/{workspaceID}",
-			workspaceHandler.DeleteWorkspace,
-		)
-
-		r.With(jwtService.Middleware).Get(
-			"/workspaces/{workspaceID}/members",
-			workspaceHandler.ListMembers,
-		)
-
-		// Remove workspace member
-		r.With(jwtService.Middleware).Delete(
-			"/workspaces/{workspaceID}/members/{userID}",
-			workspaceHandler.RemoveMember,
-		)
-		// Leave workspace
-		r.With(jwtService.Middleware).Delete(
-			"/workspaces/{workspaceID}/leave",
-			workspaceHandler.LeaveWorkspace,
-		)
-		// Transfer workspace ownership
-		r.With(jwtService.Middleware).Post(
-			"/workspaces/{workspaceID}/transfer-ownership",
-			workspaceHandler.TransferOwnership,
-		)
-		// Change workspace member role
-		r.With(jwtService.Middleware).Patch(
-			"/workspaces/{workspaceID}/members/{userID}/role",
-			workspaceHandler.ChangeMemberRole,
-		)
-		r.With(jwtService.Middleware).Post(
-			"/workspaces/{workspaceID}/invitations",
-			workspaceHandler.CreateInvitation,
-		)
-		// Cancel workspace invitation
-		r.With(jwtService.Middleware).Delete(
-			"/workspaces/{workspaceID}/invitations/{invitationID}",
-			workspaceHandler.CancelInvitation,
-		)
-
-		// List workspace invitations
-		r.With(jwtService.Middleware).Get(
-			"/workspaces/{workspaceID}/invitations",
-			workspaceHandler.ListInvitations,
-		)
-		// Accept workspace invitation
-		r.With(jwtService.Middleware).Post(
-			"/invitations/{token}/accept",
-			workspaceHandler.AcceptInvitation,
-		)
-
-		// Reject workspace invitation
-		r.With(jwtService.Middleware).Post(
-			"/invitations/{token}/reject",
-			workspaceHandler.RejectInvitation,
-		)
 	})
 
 	return r

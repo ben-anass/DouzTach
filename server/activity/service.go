@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/ben-anass/DouzTach/internal/repository"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -14,6 +15,7 @@ import (
 var (
 	ErrInvalidInput = errors.New("invalid activity input")
 	ErrNotMember    = errors.New("user is not a workspace member")
+	ErrReadOnly     = errors.New("workspace role cannot modify resources")
 )
 
 const maxPageSize = 100
@@ -87,6 +89,26 @@ func RequireWorkspaceMember(ctx context.Context, q *repository.Queries, workspac
 	return requireWorkspaceMember(ctx, q, workspaceID, userID)
 }
 
+func RequireWorkspaceWriter(ctx context.Context, q *repository.Queries, workspaceID, userID pgtype.UUID) error {
+	if !workspaceID.Valid || !userID.Valid {
+		return invalid("workspace and user IDs are required")
+	}
+	role, err := q.GetWorkspaceMemberRole(ctx, repository.GetWorkspaceMemberRoleParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotMember
+	}
+	if err != nil {
+		return fmt.Errorf("check workspace write permission: %w", err)
+	}
+	if !workspaceRoleCanWrite(role) {
+		return ErrReadOnly
+	}
+	return nil
+}
+
 func requireWorkspaceMember(ctx context.Context, q *repository.Queries, workspaceID, userID pgtype.UUID) error {
 	isMember, err := q.IsWorkspaceMember(ctx, repository.IsWorkspaceMemberParams{
 		WorkspaceID: workspaceID,
@@ -99,6 +121,15 @@ func requireWorkspaceMember(ctx context.Context, q *repository.Queries, workspac
 		return ErrNotMember
 	}
 	return nil
+}
+
+func workspaceRoleCanWrite(role string) bool {
+	switch role {
+	case "owner", "admin", "member":
+		return true
+	default:
+		return false
+	}
 }
 
 func validatePage(pageSize, pageOffset int32) error {

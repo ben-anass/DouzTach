@@ -98,6 +98,20 @@ RETURNING
     created_at,
     read_at;
 
+-- name: IsWorkspaceNotificationRecipient :one
+SELECT EXISTS (
+    SELECT 1
+    FROM workspace_members wm
+    WHERE wm.workspace_id = sqlc.arg(workspace_id)
+      AND wm.user_id = sqlc.arg(user_id)
+    UNION ALL
+    SELECT 1
+    FROM workspace_invitations wi
+    WHERE wi.workspace_id = sqlc.arg(workspace_id)
+      AND wi.invitee_user_id = sqlc.arg(user_id)
+      AND wi.status = 'pending'
+);
+
 -- name: CreateActivityLog :one
 INSERT INTO activity_logs (
     actor_user_id,
@@ -158,6 +172,11 @@ RETURNING
     message,
     created_at,
     read_at;
+
+-- name: MarkAllNotificationsRead :exec
+UPDATE notifications
+SET read_at = COALESCE(read_at, NOW())
+WHERE recipient_user_id = $1;
 
 -- name: ListActivityForWorkspace :many
 SELECT

@@ -33,11 +33,11 @@ type UpdateSprintInput struct {
 }
 
 type SprintReport struct {
-	TotalStories         int64
-	CompletedStories     int64
-	CommittedStoryPoints int64
-	Velocity             int64
-	CompletionRate       float64
+	TotalStories         int64   `json:"total_stories"`
+	CompletedStories     int64   `json:"completed_stories"`
+	CommittedStoryPoints int64   `json:"committed_story_points"`
+	Velocity             int64   `json:"velocity"`
+	CompletionRate       float64 `json:"completion_rate"`
 }
 
 func (s *Service) CreateSprint(ctx context.Context, input CreateSprintInput) (repository.Sprint, error) {
@@ -46,7 +46,7 @@ func (s *Service) CreateSprint(ctx context.Context, input CreateSprintInput) (re
 		return repository.Sprint{}, err
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.Sprint, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.Sprint, error) {
 		sprint, err := q.CreateSprint(ctx, repository.CreateSprintParams{
 			WorkspaceID: input.WorkspaceID,
 			Name:        input.Name,
@@ -90,6 +90,39 @@ func (s *Service) GetSprint(ctx context.Context, workspaceID, sprintID pgtype.UU
 	return sprint, nil
 }
 
+func (s *Service) DeleteSprint(ctx context.Context, workspaceID, actorUserID, sprintID pgtype.UUID) error {
+	if !workspaceID.Valid || !actorUserID.Valid || !sprintID.Valid {
+		return invalid("workspace, actor, and sprint IDs are required")
+	}
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
+		sprint, err := q.GetSprintForUpdate(ctx, repository.GetSprintForUpdateParams{
+			ID:          sprintID,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			return struct{}{}, notFound(err)
+		}
+		if sprint.Status != "planned" {
+			return struct{}{}, ErrInvalidTransition
+		}
+		deleted, err := q.DeletePlannedSprint(ctx, repository.DeletePlannedSprintParams{
+			ID:          sprintID,
+			WorkspaceID: workspaceID,
+		})
+		if err != nil {
+			return struct{}{}, notFound(err)
+		}
+		if err := recordActivity(ctx, q, actorUserID, workspaceID, "deleted", "sprint", sprintID, sprint, map[string]any{
+			"deleted": true,
+			"name":    deleted.Name,
+		}); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, nil
+	})
+	return err
+}
+
 func (s *Service) UpdateSprint(ctx context.Context, input UpdateSprintInput) (repository.Sprint, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	if !input.SprintID.Valid {
@@ -99,7 +132,7 @@ func (s *Service) UpdateSprint(ctx context.Context, input UpdateSprintInput) (re
 		return repository.Sprint{}, err
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.Sprint, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.Sprint, error) {
 		previous, err := q.GetSprintForUpdate(ctx, repository.GetSprintForUpdateParams{
 			ID:          input.SprintID,
 			WorkspaceID: input.WorkspaceID,
@@ -156,7 +189,7 @@ func (s *Service) transitionSprint(
 		return repository.Sprint{}, invalid("workspace, actor, and sprint IDs are required")
 	}
 
-	sprint, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.Sprint, error) {
+	sprint, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (repository.Sprint, error) {
 		previous, err := q.GetSprintForUpdate(ctx, repository.GetSprintForUpdateParams{
 			ID:          sprintID,
 			WorkspaceID: workspaceID,
@@ -206,7 +239,7 @@ func (s *Service) SetBacklogStoryPosition(ctx context.Context, workspaceID, acto
 		return invalid("backlog position cannot be negative")
 	}
 
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		previous, err := q.GetUserStory(ctx, repository.GetUserStoryParams{ID: storyID, WorkspaceID: workspaceID})
 		if err != nil {
 			return struct{}{}, notFound(err)
@@ -235,7 +268,7 @@ func (s *Service) AddStoryToSprint(ctx context.Context, workspaceID, actorUserID
 		return invalid("workspace, actor, sprint, and story IDs are required")
 	}
 
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		sprint, err := q.GetSprintForUpdate(ctx, repository.GetSprintForUpdateParams{ID: sprintID, WorkspaceID: workspaceID})
 		if err != nil {
 			return struct{}{}, notFound(err)
@@ -288,7 +321,7 @@ func (s *Service) RemoveStoryFromSprint(ctx context.Context, workspaceID, actorU
 	if !workspaceID.Valid || !actorUserID.Valid || !sprintID.Valid || !storyID.Valid {
 		return invalid("workspace, actor, sprint, and story IDs are required")
 	}
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		sprint, err := q.GetSprintForUpdate(ctx, repository.GetSprintForUpdateParams{ID: sprintID, WorkspaceID: workspaceID})
 		if err != nil {
 			return struct{}{}, notFound(err)

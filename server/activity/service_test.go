@@ -27,3 +27,24 @@ func TestValidatePage(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceRoleCanWrite(t *testing.T) {
+	tests := []struct {
+		role string
+		want bool
+	}{
+		{role: "owner", want: true},
+		{role: "admin", want: true},
+		{role: "member", want: true},
+		{role: "viewer"},
+		{role: "unknown"},
+		{role: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.role, func(t *testing.T) {
+			if got := workspaceRoleCanWrite(test.role); got != test.want {
+				t.Fatalf("workspaceRoleCanWrite(%q) = %v, want %v", test.role, got, test.want)
+			}
+		})
+	}
+}

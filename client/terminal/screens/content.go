@@ -138,7 +138,7 @@ func Chat(c Context) string {
 		b.WriteString(Empty(c,
 			"No chat channels",
 			"The backend returned no channels for this workspace.",
-			"Channel creation and messaging require the chat API contract.",
+			"Use 'douztech chat' to manage channels and messages from the CLI.",
 		))
 		return b.String()
 	}
@@ -156,7 +156,7 @@ func Chat(c Context) string {
 	b.WriteString(strings.Join(lines, "\n"))
 	b.WriteString("\n\n")
 	b.WriteString(components.Panel(c.Styles, "Messages",
-		c.Styles.Muted.Render("Message history and realtime delivery are not connected yet. The websocket contract is still pending, so no messages are simulated."),
+		c.Styles.Muted.Render("Message history is available through 'douztech chat messages'. Realtime delivery is not wired into the terminal UI; no messages are simulated."),
 		c.Width,
 	))
 	return b.String()

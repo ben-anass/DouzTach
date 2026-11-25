@@ -98,11 +98,13 @@ func loadData(parent context.Context, services api.Services, cfg config.Config) 
 		}
 	}
 	if services.Chat != nil {
-		channels, err := services.Chat.Channels(ctx)
-		if err != nil {
-			addErr(err)
-		} else {
-			data.Channels = channels
+		if workspaceID != "" {
+			channels, err := services.Chat.Channels(ctx, workspaceID)
+			if err != nil {
+				addErr(err)
+			} else {
+				data.Channels = channels
+			}
 		}
 	}
 

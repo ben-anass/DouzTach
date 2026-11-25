@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ben-anass/DouzTach/client/api"
 	"github.com/ben-anass/DouzTach/client/config"
 	"github.com/ben-anass/DouzTach/client/terminal"
 	"github.com/ben-anass/DouzTach/client/terminal/components"
@@ -349,7 +350,7 @@ terminal and never stores credentials in the configuration file.`,
 			}
 			if !app.Services.Ready() {
 				app.spacer()
-				app.muted("Next: sign in with 'douztech login' once Member 2 publishes the API contract.")
+				app.muted("Next: sign in with 'douztech login' when the API is available.")
 			}
 			return nil
 		},
@@ -487,18 +488,79 @@ a required check fails so it can be used in scripts.`,
 				}
 			}
 
-			if app.Services.Ready() {
-				checks = append(checks, doctorCheck{
-					Name:   "contract",
-					Status: checkOK,
-					Detail: "implemented",
-				})
+			if app.Session != nil && app.Session.Valid() {
+				checkCtx, checkCancel := app.requestContext(cmd.Context())
+				domainChecks := []struct {
+					name  string
+					check func() error
+				}{
+					{"authentication", func() error { _, err := app.Services.Auth.Profile(checkCtx); return err }},
+					{"workspaces", func() error { _, err := app.Services.Workspaces.List(checkCtx); return err }},
+				}
+				workspaceID := app.Config.WorkspaceID
+				if workspaceID != "" {
+					domainChecks = append(domainChecks,
+						struct {
+							name  string
+							check func() error
+						}{"tasks", func() error {
+							_, err := app.Services.Tasks.List(checkCtx, api.TaskFilter{WorkspaceID: workspaceID})
+							return err
+						}},
+						struct {
+							name  string
+							check func() error
+						}{"epics", func() error { _, err := app.Services.Epics.List(checkCtx, workspaceID); return err }},
+						struct {
+							name  string
+							check func() error
+						}{"user stories", func() error { _, err := app.Services.UserStories.List(checkCtx, workspaceID); return err }},
+						struct {
+							name  string
+							check func() error
+						}{"sprints", func() error { _, err := app.Services.Sprints.List(checkCtx, workspaceID); return err }},
+						struct {
+							name  string
+							check func() error
+						}{"chat", func() error { _, err := app.Services.Chat.Channels(checkCtx, workspaceID); return err }},
+						struct {
+							name  string
+							check func() error
+						}{"activity", func() error { _, err := app.Services.Activity.List(checkCtx, workspaceID, 1); return err }},
+					)
+				} else {
+					for _, name := range []string{"tasks", "epics", "user stories", "sprints", "chat", "activity"} {
+						checks = append(checks, doctorCheck{
+							Name:    name,
+							Status:  checkWarn,
+							Detail:  "skipped; configure a workspace to check this service",
+							Failure: true,
+						})
+					}
+				}
+				domainChecks = append(domainChecks,
+					struct {
+						name  string
+						check func() error
+					}{"notifications", func() error { _, err := app.Services.Notifications.List(checkCtx); return err }},
+				)
+				for _, domain := range domainChecks {
+					if err := domain.check(); err != nil {
+						checks = append(checks, doctorCheck{Name: domain.name, Status: checkFail, Detail: err.Error(), Failure: true})
+					} else {
+						checks = append(checks, doctorCheck{Name: domain.name, Status: checkOK, Detail: "reachable"})
+					}
+				}
+				checkCancel()
 			} else {
-				checks = append(checks, doctorCheck{
-					Name:   "contract",
-					Status: checkWarn,
-					Detail: "pending: the backend endpoints from Member 2 are not available yet",
-				})
+				for _, name := range []string{"authentication", "workspaces", "tasks", "epics", "user stories", "sprints", "chat", "notifications", "activity"} {
+					checks = append(checks, doctorCheck{
+						Name:    name,
+						Status:  checkWarn,
+						Detail:  "skipped until a valid session is available",
+						Failure: true,
+					})
+				}
 			}
 
 			failures := 0
@@ -513,7 +575,7 @@ a required check fails so it can be used in scripts.`,
 				if check.Failure {
 					failures++
 				}
-				fmt.Fprintf(app.Out, "%s  %s%s\n", icon,
+				fmt.Fprintf(app.Out, "%s  %s  %s\n", icon,
 					app.Styles.Muted.Render(components.PadRight(check.Name, 14)),
 					check.Detail)
 			}

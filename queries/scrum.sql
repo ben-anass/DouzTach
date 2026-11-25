@@ -352,6 +352,13 @@ RETURNING
     updated_at,
     completed_at;
 
+-- name: DeletePlannedSprint :one
+DELETE FROM sprints
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'planned'
+RETURNING id, workspace_id, name;
+
 -- name: StartSprint :one
 UPDATE sprints
 SET status = 'active', updated_at = NOW()

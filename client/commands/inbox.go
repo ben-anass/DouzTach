@@ -203,7 +203,11 @@ func newChatChannelsCommand(app *App) *cobra.Command {
 			}
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			channels, err := app.Services.Chat.Channels(ctx)
+			workspaceID, err := app.workspaceID()
+			if err != nil {
+				return err
+			}
+			channels, err := app.Services.Chat.Channels(ctx, workspaceID)
 			if err != nil {
 				return err
 			}
@@ -247,7 +251,11 @@ func newChatMessagesCommand(app *App) *cobra.Command {
 			}
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			messages, err := app.Services.Chat.Messages(ctx, channelID, limit)
+			workspaceID, err := app.workspaceID()
+			if err != nil {
+				return err
+			}
+			messages, err := app.Services.Chat.Messages(ctx, workspaceID, channelID, limit)
 			if err != nil {
 				return err
 			}
@@ -309,7 +317,11 @@ func newChatSendCommand(app *App) *cobra.Command {
 
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			sent, err := app.Services.Chat.Send(ctx, channelID, body)
+			workspaceID, err := app.workspaceID()
+			if err != nil {
+				return err
+			}
+			sent, err := app.Services.Chat.Send(ctx, workspaceID, channelID, body)
 			if err != nil {
 				return err
 			}

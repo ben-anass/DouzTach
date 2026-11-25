@@ -1,6 +1,13 @@
-# Backend API contract — what the CLI needs
+# Backend API contract request (historical)
 
-**Status:** blocking the terminal client.
+> This is a historical contract request and is not the current source of truth.
+> The CLI now has real HTTP adapters in `client/api/http_services.go`, and the
+> API route registry is in `server/api/routes/routes.go`. The endpoint lists,
+> schemas, and "not implemented" statements below describe earlier assumptions
+> and must not be used to infer current behavior. End-to-end verification still
+> depends on an isolated PostgreSQL test environment.
+
+**Historical status:** blocking the terminal client.
 **Owner of the backend:** Member 2 (nani) — auth, users, workspaces, members, invitations, permissions.
 **Owner of data modules:** Member 3 (med) — tasks, epics, scrum, chat, notifications, activity.
 

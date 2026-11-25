@@ -282,9 +282,13 @@ func newTaskShowCommand(app *App) *cobra.Command {
 			if err := validation.ID("task ID", taskID); err != nil {
 				return err
 			}
+			workspaceID, err := app.workspaceID()
+			if err != nil {
+				return err
+			}
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			task, err := app.Services.Tasks.Get(ctx, taskID)
+			task, err := app.Services.Tasks.Get(ctx, workspaceID, taskID)
 			if err != nil {
 				return err
 			}
@@ -319,6 +323,10 @@ func newTaskUpdateCommand(app *App) *cobra.Command {
 			}
 			taskID := strings.TrimSpace(args[0])
 			if err := validation.ID("task ID", taskID); err != nil {
+				return err
+			}
+			workspaceID, err := app.workspaceID()
+			if err != nil {
 				return err
 			}
 			values := map[string]string{
@@ -439,7 +447,7 @@ func newTaskUpdateCommand(app *App) *cobra.Command {
 
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			task, err := app.Services.Tasks.Update(ctx, taskID, request)
+			task, err := app.Services.Tasks.Update(ctx, workspaceID, taskID, request)
 			if err != nil {
 				return err
 			}
@@ -476,6 +484,10 @@ func newTaskDeleteCommand(app *App) *cobra.Command {
 			if err := validation.ID("task ID", taskID); err != nil {
 				return err
 			}
+			workspaceID, err := app.workspaceID()
+			if err != nil {
+				return err
+			}
 			if !yes {
 				if !app.Interactive {
 					return errors.New("refusing to delete a task without confirmation; re-run with --yes")
@@ -494,7 +506,7 @@ func newTaskDeleteCommand(app *App) *cobra.Command {
 			}
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			if err := app.Services.Tasks.Delete(ctx, taskID); err != nil {
+			if err := app.Services.Tasks.Delete(ctx, workspaceID, taskID); err != nil {
 				return err
 			}
 			app.success("Deleted task %s.", taskID)

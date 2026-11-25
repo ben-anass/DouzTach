@@ -213,6 +213,15 @@ type Member struct {
 	JoinedAt time.Time
 }
 
+type WorkspaceInvitation struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Email       string `json:"email"`
+	Role        string `json:"role"`
+	Status      string `json:"status"`
+	Token       string `json:"token"`
+}
+
 // Task is a work item.
 type Task struct {
 	ID          string
@@ -256,6 +265,9 @@ type Epic struct {
 	Title       string
 	Description string
 	Status      string
+	Priority    string
+	Color       string
+	StartDate   *time.Time
 	WorkspaceID string
 	Owner       *User
 	DueDate     *time.Time
@@ -263,6 +275,24 @@ type Epic struct {
 	DoneCount   int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// UserStory is a product requirement planned within a workspace.
+type UserStory struct {
+	ID                 string
+	EpicID             string
+	Title              string
+	Description        string
+	AcceptanceCriteria string
+	Status             string
+	Priority           string
+	AssigneeID         string
+	ReporterID         string
+	StoryPoints        *int
+	BacklogPosition    int
+	WorkspaceID        string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // Progress returns a value between 0 and 1.
@@ -293,6 +323,15 @@ type Sprint struct {
 	DoneCount   int
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// SprintReport summarizes sprint story and velocity metrics.
+type SprintReport struct {
+	TotalStories         int64
+	CompletedStories     int64
+	CommittedStoryPoints int64
+	Velocity             int64
+	CompletionRate       float64
 }
 
 // Progress returns a value between 0 and 1.

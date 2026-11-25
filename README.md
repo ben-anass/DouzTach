@@ -128,13 +128,26 @@ cp .env.example .env
 Configure your PostgreSQL credentials in `.env`:
 
 ```env
+APP_ENV=development
 POSTGRES_USER=your_username
 POSTGRES_PASSWORD=your_password
 POSTGRES_DB=douztach
 POSTGRES_PORT=5432
+JWT_SECRET=replace_with_a_random_secret_at_least_32_bytes
+TLS_CERT_FILE=
+TLS_KEY_FILE=
 ```
 
-**Important:** Never commit your `.env` file or expose your database credentials.
+Generate a local JWT secret with `openssl rand -base64 48`. The server rejects
+secrets shorter than 32 bytes. Keep the generated value private and never commit
+`.env`.
+
+Plaintext HTTP is enabled only when `APP_ENV=development`; this is for local
+development and must not be exposed to untrusted networks. In production, set
+`APP_ENV=production` and configure both `TLS_CERT_FILE` and `TLS_KEY_FILE` with
+the server certificate and private key. The server then listens using HTTPS.
+Provide database and JWT secrets through the deployment environment or a
+protected `.env` file; do not use the example placeholders in production.
 
 ### 3. Start PostgreSQL
 
@@ -154,7 +167,7 @@ docker compose ps
 go run ./cmd/server
 ```
 
-The API server will start at:
+With the example development configuration, the API server will start at:
 
 ```text
 http://localhost:8080

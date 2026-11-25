@@ -12,10 +12,9 @@ import (
 )
 
 var (
-	// ErrContractPending means the client is implemented but the backend REST
-	// contract (paths, payloads, schemas) has not been supplied yet. It is
-	// never replaced with a simulated success.
-	ErrContractPending = errors.New("backend API contract is not available yet (waiting for nani)")
+	// ErrContractPending means an operation has no configured backend adapter.
+	// It is never replaced with a simulated success.
+	ErrContractPending = errors.New("backend operation is not available in this client configuration")
 
 	// ErrNotConfigured means no API base URL has been configured.
 	ErrNotConfigured = errors.New("backend API URL is not configured")

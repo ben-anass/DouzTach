@@ -29,8 +29,4 @@ func main() {
 		commands.ReportError(os.Stderr, styles.New(styles.DetectNoColor()), err)
 		os.Exit(commands.ExitCode(err))
 	}
-import "github.com/ben-anass/DouzTach/client/commands"
-
-func main() {
-	commands.Execute()
 }

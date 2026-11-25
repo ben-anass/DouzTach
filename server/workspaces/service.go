@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/ben-anass/DouzTach/internal/repository"
+	"github.com/ben-anass/DouzTach/server/notifications"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"strings"
@@ -117,7 +119,7 @@ func (s *Service) CreateWorkspace(
 	return workspace, nil
 }
 
-func (s *Service) ListWorkspacesForUser(ctx context.Context, userID string) ([]repository.Workspace, error) {
+func (s *Service) ListWorkspacesForUser(ctx context.Context, userID string) ([]repository.ListWorkspacesForUserRow, error) {
 	var id pgtype.UUID
 
 	if err := id.Scan(userID); err != nil {
@@ -130,6 +132,37 @@ func (s *Service) ListWorkspacesForUser(ctx context.Context, userID string) ([]r
 	}
 
 	return workspaces, nil
+}
+
+func (s *Service) GetWorkspaceForUser(ctx context.Context, workspaceID, userID string) (repository.Workspace, error) {
+	var id, actorID pgtype.UUID
+	if err := id.Scan(workspaceID); err != nil || !id.Valid {
+		return repository.Workspace{}, errors.New("invalid workspace ID")
+	}
+	if err := actorID.Scan(userID); err != nil || !actorID.Valid {
+		return repository.Workspace{}, errors.New("invalid user ID")
+	}
+	workspace, err := s.queries.GetWorkspaceByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return repository.Workspace{}, errors.New("workspace not found")
+	}
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf("get workspace: %w", err)
+	}
+	if workspace.DeletedAt.Valid {
+		return repository.Workspace{}, errors.New("workspace is deleted")
+	}
+	member, err := s.queries.IsWorkspaceMember(ctx, repository.IsWorkspaceMemberParams{
+		WorkspaceID: id,
+		UserID:      actorID,
+	})
+	if err != nil {
+		return repository.Workspace{}, fmt.Errorf("check workspace membership: %w", err)
+	}
+	if !member {
+		return repository.Workspace{}, errors.New("user is not a workspace member")
+	}
+	return workspace, nil
 }
 
 func (s *Service) ListWorkspaceMembers(ctx context.Context, workspaceID, userID string) ([]repository.WorkspaceMember, error) {
@@ -1078,6 +1111,17 @@ func (s *Service) ChangeMemberRole(
 			"update workspace member role: %w", err,
 		)
 	}
+	if targetRole != newRole {
+		if _, err := notifications.CreateInTransaction(ctx, qtx, notifications.CreateInput{
+			RecipientUserID: targetUUID,
+			WorkspaceID:     workspaceUUID,
+			EventType:       "workspace_role_changed",
+			RelatedEntityID: targetUUID,
+			Message:         fmt.Sprintf("Your role in %s changed to %s.", workspace.Name, newRole),
+		}); err != nil {
+			return repository.WorkspaceMember{}, fmt.Errorf("notify member of role change: %w", err)
+		}
+	}
 
 	// 6. Commit.
 	if err := tx.Commit(ctx); err != nil {
@@ -1256,6 +1300,17 @@ func (s *Service) CreateInvitation(
 		return repository.WorkspaceInvitation{}, fmt.Errorf(
 			"create workspace invitation: %w", err,
 		)
+	}
+	if inviteeUUID.Valid {
+		if _, err := notifications.CreateInTransaction(ctx, qtx, notifications.CreateInput{
+			RecipientUserID: inviteeUUID,
+			WorkspaceID:     workspaceUUID,
+			EventType:       "workspace_invitation",
+			RelatedEntityID: invitation.ID,
+			Message:         fmt.Sprintf("You were invited to join %s as a %s.", workspace.Name, role),
+		}); err != nil {
+			return repository.WorkspaceInvitation{}, fmt.Errorf("notify invitee: %w", err)
+		}
 	}
 
 	// 7. Commit.
@@ -1443,6 +1498,24 @@ func (s *Service) AcceptInvitation(
 	})
 	if err != nil {
 		return repository.WorkspaceInvitation{}, fmt.Errorf("accept invitation: %w", err)
+	}
+	inviterIsMember, err := qtx.IsWorkspaceMember(ctx, repository.IsWorkspaceMemberParams{
+		WorkspaceID: invitation.WorkspaceID,
+		UserID:      invitation.InviterUserID,
+	})
+	if err != nil {
+		return repository.WorkspaceInvitation{}, fmt.Errorf("check inviter membership: %w", err)
+	}
+	if inviterIsMember {
+		if _, err := notifications.CreateInTransaction(ctx, qtx, notifications.CreateInput{
+			RecipientUserID: invitation.InviterUserID,
+			WorkspaceID:     invitation.WorkspaceID,
+			EventType:       "workspace_member_added",
+			RelatedEntityID: invitation.ID,
+			Message:         fmt.Sprintf("%s accepted your workspace invitation.", invitation.Email.String),
+		}); err != nil {
+			return repository.WorkspaceInvitation{}, fmt.Errorf("notify inviter of new member: %w", err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

@@ -248,6 +248,33 @@ func (q *Queries) GetChatChannel(ctx context.Context, arg GetChatChannelParams) 
 	return i, err
 }
 
+const isWorkspaceNotificationRecipient = `-- name: IsWorkspaceNotificationRecipient :one
+SELECT EXISTS (
+    SELECT 1
+    FROM workspace_members wm
+    WHERE wm.workspace_id = $1
+      AND wm.user_id = $2
+    UNION ALL
+    SELECT 1
+    FROM workspace_invitations wi
+    WHERE wi.workspace_id = $1
+      AND wi.invitee_user_id = $2
+      AND wi.status = 'pending'
+)
+`
+
+type IsWorkspaceNotificationRecipientParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) IsWorkspaceNotificationRecipient(ctx context.Context, arg IsWorkspaceNotificationRecipientParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isWorkspaceNotificationRecipient, arg.WorkspaceID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listActivityForWorkspace = `-- name: ListActivityForWorkspace :many
 SELECT
     id,
@@ -452,6 +479,17 @@ func (q *Queries) ListNotificationsForUser(ctx context.Context, arg ListNotifica
 		return nil, err
 	}
 	return items, nil
+}
+
+const markAllNotificationsRead = `-- name: MarkAllNotificationsRead :exec
+UPDATE notifications
+SET read_at = COALESCE(read_at, NOW())
+WHERE recipient_user_id = $1
+`
+
+func (q *Queries) MarkAllNotificationsRead(ctx context.Context, recipientUserID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markAllNotificationsRead, recipientUserID)
+	return err
 }
 
 const markNotificationRead = `-- name: MarkNotificationRead :one

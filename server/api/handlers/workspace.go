@@ -101,11 +101,48 @@ func (h *WorkspaceHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if workspaces == nil {
-		workspaces = []repository.Workspace{}
+		workspaces = []repository.ListWorkspacesForUserRow{}
 	}
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"workspaces": workspaces,
+	})
+}
+
+func (h *WorkspaceHandler) Get(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	workspace, err := h.workspaceService.GetWorkspaceForUser(r.Context(), chi.URLParam(r, "workspaceID"), userID)
+	if err != nil {
+		switch err.Error() {
+		case "invalid workspace ID", "invalid user ID":
+			http.Error(w, `{"error":"invalid ID"}`, http.StatusBadRequest)
+		case "workspace not found", "workspace is deleted":
+			http.Error(w, `{"error":"workspace not found"}`, http.StatusNotFound)
+		case "user is not a workspace member":
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+		default:
+			http.Error(w, `{"error":"could not get workspace"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"workspace": map[string]interface{}{
+			"id":            workspace.ID.String(),
+			"owner_user_id": workspace.OwnerUserID.String(),
+			"name":          workspace.Name,
+			"nickname":      workspace.Nickname.String,
+			"description":   workspace.Description.String,
+			"kind":          workspace.Kind,
+			"theme":         workspace.Theme.String,
+			"accent_color":  workspace.AccentColor.String,
+			"created_at":    workspace.CreatedAt.Time,
+			"updated_at":    workspace.UpdatedAt.Time,
+		},
 	})
 }
 

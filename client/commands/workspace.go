@@ -30,8 +30,75 @@ func newWorkspaceCommand(app *App) *cobra.Command {
 		newWorkspaceCreateCommand(app),
 		newWorkspaceSwitchCommand(app),
 		newWorkspaceMembersCommand(app),
+		newWorkspaceInviteCommand(app),
+		newWorkspaceAcceptInvitationCommand(app),
 	)
 	return cmd
+}
+
+func newWorkspaceInviteCommand(app *App) *cobra.Command {
+	var email, role string
+	cmd := &cobra.Command{
+		Use:   "invite",
+		Short: "Invite an existing account to the selected workspace",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := app.requireReady("Workspace invitations"); err != nil {
+				return err
+			}
+			workspaceID, err := app.workspaceID()
+			if err != nil {
+				return err
+			}
+			if err := validation.Email("email", email); err != nil {
+				return err
+			}
+			if role == "" {
+				role = "member"
+			}
+			if role, err = validation.Enum("role", role, []string{"admin", "member", "viewer"}); err != nil {
+				return err
+			}
+			ctx, cancel := app.requestContext(cmd.Context())
+			defer cancel()
+			invitation, err := app.Services.Workspaces.CreateInvitation(ctx, workspaceID, email, role)
+			if err != nil {
+				return err
+			}
+			if invitation == nil || invitation.Token == "" {
+				return errors.New("the backend did not return an invitation token")
+			}
+			app.success("Invited %s as %s. Share this invitation token with them: %s", invitation.Email, invitation.Role, invitation.Token)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&email, "email", "", "invitee email")
+	cmd.Flags().StringVar(&role, "role", "member", "admin, member, or viewer")
+	return cmd
+}
+
+func newWorkspaceAcceptInvitationCommand(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "accept-invitation <token>",
+		Short: "Accept a workspace invitation",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := app.requireReady("Workspace invitation acceptance"); err != nil {
+				return err
+			}
+			token := strings.TrimSpace(args[0])
+			if err := validation.ID("invitation token", token); err != nil {
+				return err
+			}
+			ctx, cancel := app.requestContext(cmd.Context())
+			defer cancel()
+			if err := app.Services.Workspaces.AcceptInvitation(ctx, token); err != nil {
+				return err
+			}
+			app.success("Accepted workspace invitation.")
+			return nil
+		},
+	}
 }
 
 func newWorkspaceListCommand(app *App) *cobra.Command {

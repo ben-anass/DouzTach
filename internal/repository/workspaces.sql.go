@@ -717,7 +717,13 @@ SELECT
     w.accent_color,
     w.created_at,
     w.updated_at,
-    w.deleted_at
+    w.deleted_at,
+    wm.role,
+    (
+        SELECT COUNT(*)::int
+        FROM workspace_members all_members
+        WHERE all_members.workspace_id = w.id
+    ) AS member_count
 FROM workspaces w
 JOIN workspace_members wm ON wm.workspace_id = w.id
 WHERE wm.user_id = $1
@@ -725,15 +731,32 @@ WHERE wm.user_id = $1
 ORDER BY w.created_at DESC
 `
 
-func (q *Queries) ListWorkspacesForUser(ctx context.Context, userID pgtype.UUID) ([]Workspace, error) {
+type ListWorkspacesForUserRow struct {
+	ID                pgtype.UUID        `json:"id"`
+	OwnerUserID       pgtype.UUID        `json:"owner_user_id"`
+	ParentWorkspaceID pgtype.UUID        `json:"parent_workspace_id"`
+	Name              string             `json:"name"`
+	Nickname          pgtype.Text        `json:"nickname"`
+	Description       pgtype.Text        `json:"description"`
+	Kind              string             `json:"kind"`
+	Theme             pgtype.Text        `json:"theme"`
+	AccentColor       pgtype.Text        `json:"accent_color"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	Role              string             `json:"role"`
+	MemberCount       int32              `json:"member_count"`
+}
+
+func (q *Queries) ListWorkspacesForUser(ctx context.Context, userID pgtype.UUID) ([]ListWorkspacesForUserRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspacesForUser, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Workspace
+	var items []ListWorkspacesForUserRow
 	for rows.Next() {
-		var i Workspace
+		var i ListWorkspacesForUserRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OwnerUserID,
@@ -747,6 +770,8 @@ func (q *Queries) ListWorkspacesForUser(ctx context.Context, userID pgtype.UUID)
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.Role,
+			&i.MemberCount,
 		); err != nil {
 			return nil, err
 		}

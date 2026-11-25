@@ -56,7 +56,13 @@ SELECT
     w.accent_color,
     w.created_at,
     w.updated_at,
-    w.deleted_at
+    w.deleted_at,
+    wm.role,
+    (
+        SELECT COUNT(*)::int
+        FROM workspace_members all_members
+        WHERE all_members.workspace_id = w.id
+    ) AS member_count
 FROM workspaces w
 JOIN workspace_members wm ON wm.workspace_id = w.id
 WHERE wm.user_id = $1

@@ -35,6 +35,35 @@ type CreateWorkspaceRequest struct {
 	Description string
 }
 
+// CreateUserStoryRequest is the JSON contract for user-story mutations.
+type CreateUserStoryRequest struct {
+	EpicID             string
+	Title              string
+	Description        string
+	AcceptanceCriteria string
+	Status             string
+	Priority           string
+	AssigneeID         string
+	StoryPoints        *int
+}
+
+type EpicMutationRequest struct {
+	Title       string
+	Description string
+	Status      string
+	Priority    string
+	Color       string
+	StartDate   string
+	EndDate     string
+}
+
+type SprintMutationRequest struct {
+	Name      string
+	Goal      string
+	StartDate string
+	EndDate   string
+}
+
 // CreateTaskRequest is the client-side task creation payload.
 type CreateTaskRequest struct {
 	WorkspaceID string
@@ -76,27 +105,52 @@ type WorkspaceService interface {
 	List(ctx context.Context) ([]Workspace, error)
 	Create(ctx context.Context, req CreateWorkspaceRequest) (*Workspace, error)
 	Members(ctx context.Context, workspaceID string) ([]Member, error)
+	CreateInvitation(ctx context.Context, workspaceID, email, role string) (*WorkspaceInvitation, error)
+	AcceptInvitation(ctx context.Context, token string) error
 }
 
 // TaskService covers task CRUD.
 type TaskService interface {
 	List(ctx context.Context, filter TaskFilter) ([]Task, error)
-	Get(ctx context.Context, taskID string) (*Task, error)
+	Get(ctx context.Context, workspaceID, taskID string) (*Task, error)
 	Create(ctx context.Context, req CreateTaskRequest) (*Task, error)
-	Update(ctx context.Context, taskID string, req UpdateTaskRequest) (*Task, error)
-	Delete(ctx context.Context, taskID string) error
+	Update(ctx context.Context, workspaceID, taskID string, req UpdateTaskRequest) (*Task, error)
+	Delete(ctx context.Context, workspaceID, taskID string) error
 }
 
-// EpicService covers epic discovery.
+// EpicService covers workspace-scoped epic operations.
 type EpicService interface {
 	List(ctx context.Context, workspaceID string) ([]Epic, error)
-	Get(ctx context.Context, epicID string) (*Epic, error)
+	Get(ctx context.Context, workspaceID, epicID string) (*Epic, error)
+	Create(ctx context.Context, workspaceID string, req EpicMutationRequest) (*Epic, error)
+	Update(ctx context.Context, workspaceID, epicID string, req EpicMutationRequest) (*Epic, error)
+	Delete(ctx context.Context, workspaceID, epicID string) error
+}
+
+// UserStoryService covers workspace-scoped user-story CRUD.
+type UserStoryService interface {
+	List(ctx context.Context, workspaceID string) ([]UserStory, error)
+	Get(ctx context.Context, workspaceID, storyID string) (*UserStory, error)
+	Create(ctx context.Context, workspaceID string, req CreateUserStoryRequest) (*UserStory, error)
+	Update(ctx context.Context, workspaceID, storyID string, req CreateUserStoryRequest) (*UserStory, error)
+	Delete(ctx context.Context, workspaceID, storyID string) error
 }
 
 // SprintService covers sprint discovery.
 type SprintService interface {
 	List(ctx context.Context, workspaceID string) ([]Sprint, error)
-	Get(ctx context.Context, sprintID string) (*Sprint, error)
+	Get(ctx context.Context, workspaceID, sprintID string) (*Sprint, error)
+	Delete(ctx context.Context, workspaceID, sprintID string) error
+	ListBacklog(ctx context.Context, workspaceID string) ([]UserStory, error)
+	ListStories(ctx context.Context, workspaceID, sprintID string) ([]UserStory, error)
+	AddStory(ctx context.Context, workspaceID, sprintID, storyID string) error
+	RemoveStory(ctx context.Context, workspaceID, sprintID, storyID string) error
+	ReorderBacklogStory(ctx context.Context, workspaceID, storyID string, position int) error
+	Board(ctx context.Context, workspaceID, sprintID string) ([]UserStory, SprintReport, error)
+	Create(ctx context.Context, workspaceID string, req SprintMutationRequest) (*Sprint, error)
+	Update(ctx context.Context, workspaceID, sprintID string, req SprintMutationRequest) (*Sprint, error)
+	Start(ctx context.Context, workspaceID, sprintID string) (*Sprint, error)
+	Complete(ctx context.Context, workspaceID, sprintID string) (*Sprint, error)
 }
 
 // NotificationService covers the notification inbox.
@@ -111,12 +165,12 @@ type ActivityService interface {
 	List(ctx context.Context, workspaceID string, limit int) ([]Activity, error)
 }
 
-// ChatService covers channels and messages. Real-time delivery is expected to
-// use client/websocket once the backend contract is published.
+// ChatService covers the authenticated HTTP channel and message operations.
+// Real-time delivery is handled by the backend WebSocket endpoint.
 type ChatService interface {
-	Channels(ctx context.Context) ([]ChatChannel, error)
-	Messages(ctx context.Context, channelID string, limit int) ([]ChatMessage, error)
-	Send(ctx context.Context, channelID, body string) (*ChatMessage, error)
+	Channels(ctx context.Context, workspaceID string) ([]ChatChannel, error)
+	Messages(ctx context.Context, workspaceID, channelID string, limit int) ([]ChatMessage, error)
+	Send(ctx context.Context, workspaceID, channelID, body string) (*ChatMessage, error)
 }
 
 // ServiceStatus describes what the client knows about the backend connection.
@@ -154,6 +208,7 @@ type Services struct {
 	Workspaces    WorkspaceService
 	Tasks         TaskService
 	Epics         EpicService
+	UserStories   UserStoryService
 	Sprints       SprintService
 	Notifications NotificationService
 	Activity      ActivityService
@@ -178,9 +233,8 @@ func (s Services) RequireReady() error {
 	return ErrContractPending
 }
 
-// NewServices builds the service bundle. Until Member 2 publishes the API
-// contract, every service is a pending implementation that returns
-// ErrContractPending; no endpoint paths or response schemas are guessed.
+// NewServices builds real HTTP adapters when an API URL is configured.
+// Without a URL, pending services fail explicitly instead of fabricating data.
 func NewServices(baseURL string, timeout time.Duration, tokenProvider func() string) (Services, error) {
 	if baseURL == "" {
 		return newPendingServices(nil), nil
@@ -189,8 +243,8 @@ func NewServices(baseURL string, timeout time.Duration, tokenProvider func() str
 	if err != nil {
 		return Services{}, err
 	}
-	services := newPendingServices(client)
-	services.Status.Detail = ErrContractPending.Error()
+	services := newHTTPServices(client)
+	services.Status.Detail = "Contract ready"
 	return services, nil
 }
 
@@ -208,6 +262,7 @@ func newPendingServices(client *Client) Services {
 		Workspaces:    pendingWorkspaces{},
 		Tasks:         pendingTasks{},
 		Epics:         pendingEpics{},
+		UserStories:   pendingUserStories{},
 		Sprints:       pendingSprints{},
 		Notifications: pendingNotifications{},
 		Activity:      pendingActivity{},
@@ -287,13 +342,21 @@ func (pendingWorkspaces) Members(context.Context, string) ([]Member, error) {
 	return nil, pendingError("list workspace members")
 }
 
+func (pendingWorkspaces) CreateInvitation(context.Context, string, string, string) (*WorkspaceInvitation, error) {
+	return nil, pendingError("create workspace invitation")
+}
+
+func (pendingWorkspaces) AcceptInvitation(context.Context, string) error {
+	return pendingError("accept workspace invitation")
+}
+
 type pendingTasks struct{}
 
 func (pendingTasks) List(context.Context, TaskFilter) ([]Task, error) {
 	return nil, pendingError("list tasks")
 }
 
-func (pendingTasks) Get(context.Context, string) (*Task, error) {
+func (pendingTasks) Get(context.Context, string, string) (*Task, error) {
 	return nil, pendingError("get task")
 }
 
@@ -301,11 +364,11 @@ func (pendingTasks) Create(context.Context, CreateTaskRequest) (*Task, error) {
 	return nil, pendingError("create task")
 }
 
-func (pendingTasks) Update(context.Context, string, UpdateTaskRequest) (*Task, error) {
+func (pendingTasks) Update(context.Context, string, string, UpdateTaskRequest) (*Task, error) {
 	return nil, pendingError("update task")
 }
 
-func (pendingTasks) Delete(context.Context, string) error {
+func (pendingTasks) Delete(context.Context, string, string) error {
 	return pendingError("delete task")
 }
 
@@ -315,8 +378,42 @@ func (pendingEpics) List(context.Context, string) ([]Epic, error) {
 	return nil, pendingError("list epics")
 }
 
-func (pendingEpics) Get(context.Context, string) (*Epic, error) {
+func (pendingEpics) Get(context.Context, string, string) (*Epic, error) {
 	return nil, pendingError("get epic")
+}
+
+func (pendingEpics) Create(context.Context, string, EpicMutationRequest) (*Epic, error) {
+	return nil, pendingError("create epic")
+}
+
+func (pendingEpics) Update(context.Context, string, string, EpicMutationRequest) (*Epic, error) {
+	return nil, pendingError("update epic")
+}
+
+func (pendingEpics) Delete(context.Context, string, string) error {
+	return pendingError("delete epic")
+}
+
+type pendingUserStories struct{}
+
+func (pendingUserStories) List(context.Context, string) ([]UserStory, error) {
+	return nil, pendingError("list user stories")
+}
+
+func (pendingUserStories) Get(context.Context, string, string) (*UserStory, error) {
+	return nil, pendingError("get user story")
+}
+
+func (pendingUserStories) Create(context.Context, string, CreateUserStoryRequest) (*UserStory, error) {
+	return nil, pendingError("create user story")
+}
+
+func (pendingUserStories) Update(context.Context, string, string, CreateUserStoryRequest) (*UserStory, error) {
+	return nil, pendingError("update user story")
+}
+
+func (pendingUserStories) Delete(context.Context, string, string) error {
+	return pendingError("delete user story")
 }
 
 type pendingSprints struct{}
@@ -325,8 +422,52 @@ func (pendingSprints) List(context.Context, string) ([]Sprint, error) {
 	return nil, pendingError("list sprints")
 }
 
-func (pendingSprints) Get(context.Context, string) (*Sprint, error) {
+func (pendingSprints) Get(context.Context, string, string) (*Sprint, error) {
 	return nil, pendingError("get sprint")
+}
+
+func (pendingSprints) Delete(context.Context, string, string) error {
+	return pendingError("delete sprint")
+}
+
+func (pendingSprints) ListBacklog(context.Context, string) ([]UserStory, error) {
+	return nil, pendingError("list sprint backlog")
+}
+
+func (pendingSprints) ListStories(context.Context, string, string) ([]UserStory, error) {
+	return nil, pendingError("list sprint stories")
+}
+
+func (pendingSprints) AddStory(context.Context, string, string, string) error {
+	return pendingError("add story to sprint")
+}
+
+func (pendingSprints) RemoveStory(context.Context, string, string, string) error {
+	return pendingError("remove story from sprint")
+}
+
+func (pendingSprints) ReorderBacklogStory(context.Context, string, string, int) error {
+	return pendingError("reorder sprint backlog")
+}
+
+func (pendingSprints) Board(context.Context, string, string) ([]UserStory, SprintReport, error) {
+	return nil, SprintReport{}, pendingError("get sprint board")
+}
+
+func (pendingSprints) Create(context.Context, string, SprintMutationRequest) (*Sprint, error) {
+	return nil, pendingError("create sprint")
+}
+
+func (pendingSprints) Update(context.Context, string, string, SprintMutationRequest) (*Sprint, error) {
+	return nil, pendingError("update sprint")
+}
+
+func (pendingSprints) Start(context.Context, string, string) (*Sprint, error) {
+	return nil, pendingError("start sprint")
+}
+
+func (pendingSprints) Complete(context.Context, string, string) (*Sprint, error) {
+	return nil, pendingError("complete sprint")
 }
 
 type pendingNotifications struct{}
@@ -351,15 +492,15 @@ func (pendingActivity) List(context.Context, string, int) ([]Activity, error) {
 
 type pendingChat struct{}
 
-func (pendingChat) Channels(context.Context) ([]ChatChannel, error) {
+func (pendingChat) Channels(context.Context, string) ([]ChatChannel, error) {
 	return nil, pendingError("list chat channels")
 }
 
-func (pendingChat) Messages(context.Context, string, int) ([]ChatMessage, error) {
+func (pendingChat) Messages(context.Context, string, string, int) ([]ChatMessage, error) {
 	return nil, pendingError("list chat messages")
 }
 
-func (pendingChat) Send(context.Context, string, string) (*ChatMessage, error) {
+func (pendingChat) Send(context.Context, string, string, string) (*ChatMessage, error) {
 	return nil, pendingError("send chat message")
 }
 
@@ -374,6 +515,7 @@ var (
 	_ WorkspaceService    = pendingWorkspaces{}
 	_ TaskService         = pendingTasks{}
 	_ EpicService         = pendingEpics{}
+	_ UserStoryService    = pendingUserStories{}
 	_ SprintService       = pendingSprints{}
 	_ NotificationService = pendingNotifications{}
 	_ ActivityService     = pendingActivity{}

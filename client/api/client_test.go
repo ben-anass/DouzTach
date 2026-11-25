@@ -92,6 +92,95 @@ func TestClientGetWithAuthAndQuery(t *testing.T) {
 	}
 }
 
+func TestWorkspaceListDecodesRoleAndMemberCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces" {
+			t.Errorf("path = %q, want /api/v1/workspaces", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"workspaces":[{"id":"workspace-1","name":"Team","description":"Example","role":"owner","member_count":3}]}`))
+	}))
+	defer server.Close()
+
+	services, err := NewServices(server.URL, time.Second, func() string { return "test-token" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaces, err := services.Workspaces.List(context.Background())
+	if err != nil {
+		t.Fatalf("list workspaces: %v", err)
+	}
+	if len(workspaces) != 1 {
+		t.Fatalf("workspace count = %d, want 1", len(workspaces))
+	}
+	if workspaces[0].Role != "owner" || workspaces[0].MemberCount != 3 {
+		t.Fatalf("workspace role/count = %q/%d, want owner/3", workspaces[0].Role, workspaces[0].MemberCount)
+	}
+}
+
+func TestHTTPServicesUseWorkspaceScopedRoutesAndBearerAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer integration-token" {
+			t.Errorf("Authorization = %q, want bearer token", got)
+		}
+
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/ws-1/stories":
+			var body struct {
+				Title              string `json:"title"`
+				AcceptanceCriteria string `json:"acceptance_criteria"`
+				EpicID             string `json:"epic_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode user-story request: %v", err)
+			}
+			if body.Title != "Improve onboarding" || body.AcceptanceCriteria != "User can sign in" || body.EpicID != "epic-1" {
+				t.Errorf("unexpected user-story request: %+v", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"story-1","title":"Improve onboarding","status":"to_do","priority":"medium"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/ws-1/sprints/sprint-1/stories":
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode sprint-story request: %v", err)
+			}
+			if body["story_id"] != "story-1" {
+				t.Errorf("story_id = %q, want story-1", body["story_id"])
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/notifications/read-all":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	services, err := NewServices(server.URL, time.Second, func() string { return "integration-token" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	story, err := services.UserStories.Create(context.Background(), "ws-1", CreateUserStoryRequest{
+		Title:              "Improve onboarding",
+		AcceptanceCriteria: "User can sign in",
+		EpicID:             "epic-1",
+	})
+	if err != nil {
+		t.Fatalf("create user story through HTTP adapter: %v", err)
+	}
+	if story.ID != "story-1" {
+		t.Fatalf("story ID = %q, want story-1", story.ID)
+	}
+	if err := services.Sprints.AddStory(context.Background(), "ws-1", "sprint-1", "story-1"); err != nil {
+		t.Fatalf("add story through HTTP adapter: %v", err)
+	}
+	if err := services.Notifications.MarkAllRead(context.Background()); err != nil {
+		t.Fatalf("mark all notifications read through HTTP adapter: %v", err)
+	}
+}
+
 func TestClientPostJSON(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -365,11 +454,52 @@ func TestNewServicesWithURL(t *testing.T) {
 	if !services.Status.Configured {
 		t.Fatal("expected configured")
 	}
-	if services.Ready() {
-		t.Fatal("contract must remain pending until implemented")
+	if !services.Ready() {
+		t.Fatal("real HTTP service adapters must be registered")
 	}
 	if services.Client == nil {
 		t.Fatal("expected client")
+	}
+}
+
+func TestHTTPUserStoryAndSprintAdapterRoutes(t *testing.T) {
+	t.Parallel()
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/workspaces/ws-1/stories":
+			_, _ = w.Write([]byte(`[{ "id":"story-1","workspace_id":"ws-1","title":"Story","status":"to_do","priority":"medium","backlog_position":0 }]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/ws-1/sprints/sprint-1/stories":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/workspaces/ws-1/sprints/sprint-1":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	services, err := NewServices(server.URL, time.Second, func() string { return "token" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stories, err := services.UserStories.List(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stories) != 1 || stories[0].ID != "story-1" {
+		t.Fatalf("unexpected stories: %+v", stories)
+	}
+	if err := services.Sprints.AddStory(context.Background(), "ws-1", "sprint-1", "story-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := services.Sprints.Delete(context.Background(), "ws-1", "sprint-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 3 {
+		t.Fatalf("requests = %v", requests)
 	}
 }
 

@@ -18,7 +18,20 @@ func newSprintCommand(app *App) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newSprintListCommand(app), newSprintShowCommand(app))
+	cmd.AddCommand(
+		newSprintListCommand(app),
+		newSprintShowCommand(app),
+		newSprintCreateCommand(app),
+		newSprintUpdateCommand(app),
+		newSprintStartCommand(app),
+		newSprintCompleteCommand(app),
+		newSprintDeleteCommand(app),
+		newSprintBacklogCommand(app),
+		newSprintAddStoryCommand(app),
+		newSprintRemoveStoryCommand(app),
+		newSprintReorderStoryCommand(app),
+		newSprintBoardCommand(app),
+	)
 	return cmd
 }
 
@@ -82,7 +95,7 @@ func newSprintShowCommand(app *App) *cobra.Command {
 			}
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			sprint, err := app.Services.Sprints.Get(ctx, sprintID)
+			sprint, err := app.Services.Sprints.Get(ctx, workspaceID, sprintID)
 			if err != nil {
 				return err
 			}
@@ -137,7 +150,13 @@ func newEpicCommand(app *App) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newEpicListCommand(app), newEpicShowCommand(app))
+	cmd.AddCommand(
+		newEpicListCommand(app),
+		newEpicShowCommand(app),
+		newEpicCreateCommand(app),
+		newEpicUpdateCommand(app),
+		newEpicDeleteCommand(app),
+	)
 	return cmd
 }
 
@@ -194,9 +213,13 @@ func newEpicShowCommand(app *App) *cobra.Command {
 			if err := validation.ID("epic ID", epicID); err != nil {
 				return err
 			}
+			workspaceID, err := app.workspaceID()
+			if err != nil {
+				return err
+			}
 			ctx, cancel := app.requestContext(cmd.Context())
 			defer cancel()
-			epic, err := app.Services.Epics.Get(ctx, epicID)
+			epic, err := app.Services.Epics.Get(ctx, workspaceID, epicID)
 			if err != nil {
 				return err
 			}

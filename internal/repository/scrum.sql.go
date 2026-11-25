@@ -607,6 +607,32 @@ func (q *Queries) CreateWorkItem(ctx context.Context, arg CreateWorkItemParams) 
 	return i, err
 }
 
+const deletePlannedSprint = `-- name: DeletePlannedSprint :one
+DELETE FROM sprints
+WHERE id = $1
+  AND workspace_id = $2
+  AND status = 'planned'
+RETURNING id, workspace_id, name
+`
+
+type DeletePlannedSprintParams struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+type DeletePlannedSprintRow struct {
+	ID          pgtype.UUID `json:"id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Name        string      `json:"name"`
+}
+
+func (q *Queries) DeletePlannedSprint(ctx context.Context, arg DeletePlannedSprintParams) (DeletePlannedSprintRow, error) {
+	row := q.db.QueryRow(ctx, deletePlannedSprint, arg.ID, arg.WorkspaceID)
+	var i DeletePlannedSprintRow
+	err := row.Scan(&i.ID, &i.WorkspaceID, &i.Name)
+	return i, err
+}
+
 const getEpic = `-- name: GetEpic :one
 SELECT
     id,

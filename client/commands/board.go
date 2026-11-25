@@ -45,7 +45,7 @@ func newBoardCommand(app *App) *cobra.Command {
 					}
 				}
 				if sprint.ID == "" {
-					fetched, err := app.Services.Sprints.Get(ctx, id)
+					fetched, err := app.Services.Sprints.Get(ctx, workspaceID, id)
 					if err != nil {
 						return err
 					}

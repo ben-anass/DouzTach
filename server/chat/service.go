@@ -47,7 +47,7 @@ func (s *Service) CreateChannel(
 	}
 
 	channel, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.ChatChannel, error) {
-		if err := activity.RequireWorkspaceMember(ctx, q, workspaceID, actorID); err != nil {
+		if err := activity.RequireWorkspaceWriter(ctx, q, workspaceID, actorID); err != nil {
 			return repository.ChatChannel{}, err
 		}
 		created, err := q.CreateChatChannel(ctx, repository.CreateChatChannelParams{
@@ -95,7 +95,7 @@ func (s *Service) PostMessage(
 	}
 
 	message, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.ChatMessage, error) {
-		if err := activity.RequireWorkspaceMember(ctx, q, workspaceID, senderID); err != nil {
+		if err := activity.RequireWorkspaceWriter(ctx, q, workspaceID, senderID); err != nil {
 			return repository.ChatMessage{}, err
 		}
 		if _, err := q.GetChatChannel(ctx, repository.GetChatChannelParams{

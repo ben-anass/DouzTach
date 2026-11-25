@@ -24,7 +24,7 @@ func Dashboard(c Context) string {
 	case !c.Ready():
 		b.WriteString("\n")
 		b.WriteString(Pending(c, "Dashboard data",
-			"The dashboard will show live task counts, the active sprint, and recent activity once Member 2 publishes the API contract."))
+			"Configure and connect to the backend to load live task counts, the active sprint, and recent activity."))
 		b.WriteString("\n")
 		b.WriteString(RenderMetrics(c, api.TaskCounts{}, false))
 		return b.String()

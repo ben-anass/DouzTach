@@ -37,15 +37,24 @@ func NewService(pool *pgxpool.Pool) *Service {
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (repository.Notification, error) {
+	return CreateInTransaction(ctx, repository.New(s.pool), input)
+}
+
+func CreateInTransaction(ctx context.Context, q *repository.Queries, input CreateInput) (repository.Notification, error) {
 	input.EventType = strings.TrimSpace(input.EventType)
 	input.Message = strings.TrimSpace(input.Message)
 	if !input.RecipientUserID.Valid || !input.WorkspaceID.Valid || input.EventType == "" || input.Message == "" {
 		return repository.Notification{}, invalid("recipient, workspace, event type, and message are required")
 	}
-
-	q := repository.New(s.pool)
-	if err := activity.RequireWorkspaceMember(ctx, q, input.WorkspaceID, input.RecipientUserID); err != nil {
-		return repository.Notification{}, err
+	allowed, err := q.IsWorkspaceNotificationRecipient(ctx, repository.IsWorkspaceNotificationRecipientParams{
+		WorkspaceID: input.WorkspaceID,
+		UserID:      input.RecipientUserID,
+	})
+	if err != nil {
+		return repository.Notification{}, fmt.Errorf("check notification recipient: %w", err)
+	}
+	if !allowed {
+		return repository.Notification{}, activity.ErrNotMember
 	}
 	notification, err := q.CreateNotification(ctx, repository.CreateNotificationParams{
 		RecipientUserID: input.RecipientUserID,
@@ -97,6 +106,16 @@ func (s *Service) MarkRead(ctx context.Context, userID, notificationID pgtype.UU
 		return repository.Notification{}, fmt.Errorf("mark notification as read: %w", err)
 	}
 	return notification, nil
+}
+
+func (s *Service) MarkAllRead(ctx context.Context, userID pgtype.UUID) error {
+	if !userID.Valid {
+		return invalid("user ID is required")
+	}
+	if err := repository.New(s.pool).MarkAllNotificationsRead(ctx, userID); err != nil {
+		return fmt.Errorf("mark all notifications as read: %w", err)
+	}
+	return nil
 }
 
 func validatePage(pageSize, pageOffset int32) error {

@@ -193,7 +193,7 @@ func SectionLabel(c Context, label string) string {
 // FooterHint returns the refresh/updated line shown under data screens.
 func FooterHint(c Context, loadedAt time.Time) string {
 	if !c.Ready() {
-		return c.Styles.Help.Render("Backend contract pending · no sample data is shown")
+		return c.Styles.Help.Render("Backend connection unavailable · no sample data is shown")
 	}
 	if loadedAt.IsZero() {
 		return ""

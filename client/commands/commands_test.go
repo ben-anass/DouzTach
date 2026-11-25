@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -233,11 +234,35 @@ func TestDoctorReportsMissingAPIURL(t *testing.T) {
 	if !strings.Contains(out, "api url") || !strings.Contains(out, "not configured") {
 		t.Fatalf("doctor output should explain the missing URL:\n%s", out)
 	}
-	if !strings.Contains(out, "contract") || !strings.Contains(out, "pending") {
-		t.Fatalf("doctor output should report the pending contract:\n%s", out)
+	if !strings.Contains(out, "authentication") || !strings.Contains(out, "skipped") {
+		t.Fatalf("doctor output should report independent service checks being skipped:\n%s", out)
 	}
 	if got := ExitCode(err); got != ExitFailure {
 		t.Fatalf("exit code = %d, want %d", got, ExitFailure)
+	}
+}
+
+func TestDoctorDoesNotPassWhenOnlyBackendRootIsReachable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	app, dir := newTestApp(t)
+	if _, err := exec(t, app, dir, "settings", "set", "api-url", server.URL); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec(t, app, dir, "doctor")
+	if err == nil {
+		t.Fatal("doctor should not pass when service checks are skipped")
+	}
+	for _, want := range []string{"backend", "HTTP 200", "authentication", "skipped"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "All required checks passed") {
+		t.Fatalf("doctor reported readiness based only on the backend root:\n%s", out)
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/ben-anass/DouzTach/internal/repository"
+	"github.com/ben-anass/DouzTach/server/activity"
+	"github.com/ben-anass/DouzTach/server/notifications"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +33,20 @@ type Service struct {
 
 func NewService(pool *pgxpool.Pool) *Service {
 	return &Service{pool: pool}
+}
+
+func (s *Service) IsWorkspaceMember(ctx context.Context, workspaceID, userID pgtype.UUID) (bool, error) {
+	if !workspaceID.Valid || !userID.Valid {
+		return false, invalid("workspace and user IDs are required")
+	}
+	member, err := repository.New(s.pool).IsWorkspaceMember(ctx, repository.IsWorkspaceMemberParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("check Scrum workspace membership: %w", err)
+	}
+	return member, nil
 }
 
 type CreateEpicInput struct {
@@ -110,7 +126,7 @@ func (s *Service) CreateEpic(ctx context.Context, input CreateEpicInput) (reposi
 		return repository.Epic{}, err
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.Epic, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.Epic, error) {
 		epic, err := q.CreateEpic(ctx, repository.CreateEpicParams{
 			WorkspaceID: input.WorkspaceID,
 			Title:       input.Title,
@@ -185,7 +201,7 @@ func (s *Service) UpdateEpic(ctx context.Context, input UpdateEpicInput) (reposi
 		return repository.Epic{}, err
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.Epic, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.Epic, error) {
 		previous, err := q.GetEpic(ctx, repository.GetEpicParams{ID: input.EpicID, WorkspaceID: input.WorkspaceID})
 		if err != nil {
 			return repository.Epic{}, notFound(err)
@@ -216,7 +232,7 @@ func (s *Service) DeleteEpic(ctx context.Context, workspaceID, actorUserID, epic
 	if !workspaceID.Valid || !actorUserID.Valid || !epicID.Valid {
 		return invalid("workspace, actor, and epic IDs are required")
 	}
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		previous, err := q.GetEpic(ctx, repository.GetEpicParams{ID: epicID, WorkspaceID: workspaceID})
 		if err != nil {
 			return struct{}{}, notFound(err)
@@ -240,7 +256,7 @@ func (s *Service) CreateUserStory(ctx context.Context, input CreateUserStoryInpu
 		return repository.UserStory{}, err
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.UserStory, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.UserStory, error) {
 		if err := validateStoryReferences(ctx, q, input.WorkspaceID, input.EpicID); err != nil {
 			return repository.UserStory{}, err
 		}
@@ -261,6 +277,17 @@ func (s *Service) CreateUserStory(ctx context.Context, input CreateUserStoryInpu
 		})
 		if err != nil {
 			return repository.UserStory{}, fmt.Errorf("create user story: %w", err)
+		}
+		if isOtherAssignee(input.AssigneeID, input.ActorUserID) {
+			if _, err := notifications.CreateInTransaction(ctx, q, notifications.CreateInput{
+				RecipientUserID: input.AssigneeID,
+				WorkspaceID:     input.WorkspaceID,
+				EventType:       "user_story_assigned",
+				RelatedEntityID: story.ID,
+				Message:         fmt.Sprintf("You were assigned to user story: %s.", story.Title),
+			}); err != nil {
+				return repository.UserStory{}, fmt.Errorf("notify user-story assignee: %w", err)
+			}
 		}
 		if err := recordActivity(ctx, q, input.ActorUserID, input.WorkspaceID, "created", "user_story", story.ID, nil, story); err != nil {
 			return repository.UserStory{}, err
@@ -302,7 +329,7 @@ func (s *Service) UpdateUserStory(ctx context.Context, input UpdateUserStoryInpu
 		return repository.UserStory{}, err
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.UserStory, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.UserStory, error) {
 		previous, err := q.GetUserStory(ctx, repository.GetUserStoryParams{ID: input.UserStoryID, WorkspaceID: input.WorkspaceID})
 		if err != nil {
 			return repository.UserStory{}, notFound(err)
@@ -328,6 +355,17 @@ func (s *Service) UpdateUserStory(ctx context.Context, input UpdateUserStoryInpu
 		if err != nil {
 			return repository.UserStory{}, notFound(err)
 		}
+		if changedAssignee(previous.AssigneeID, input.AssigneeID) && isOtherAssignee(input.AssigneeID, input.ActorUserID) {
+			if _, err := notifications.CreateInTransaction(ctx, q, notifications.CreateInput{
+				RecipientUserID: input.AssigneeID,
+				WorkspaceID:     input.WorkspaceID,
+				EventType:       "user_story_assigned",
+				RelatedEntityID: updated.ID,
+				Message:         fmt.Sprintf("You were assigned to user story: %s.", updated.Title),
+			}); err != nil {
+				return repository.UserStory{}, fmt.Errorf("notify user-story assignee: %w", err)
+			}
+		}
 		if err := recordActivity(ctx, q, input.ActorUserID, input.WorkspaceID, "updated", "user_story", input.UserStoryID, previous, updated); err != nil {
 			return repository.UserStory{}, err
 		}
@@ -339,7 +377,7 @@ func (s *Service) DeleteUserStory(ctx context.Context, workspaceID, actorUserID,
 	if !workspaceID.Valid || !actorUserID.Valid || !storyID.Valid {
 		return invalid("workspace, actor, and story IDs are required")
 	}
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		previous, err := q.GetUserStory(ctx, repository.GetUserStoryParams{ID: storyID, WorkspaceID: workspaceID})
 		if err != nil {
 			return struct{}{}, notFound(err)
@@ -374,7 +412,7 @@ func (s *Service) CreateWorkItem(ctx context.Context, input CreateWorkItemInput)
 		return repository.WorkItem{}, err
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.WorkItem, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.WorkItem, error) {
 		if err := validateWorkItemReferences(ctx, q, input.WorkspaceID, input.UserStoryID, input.SprintID, input.ParentID); err != nil {
 			return repository.WorkItem{}, err
 		}
@@ -398,6 +436,17 @@ func (s *Service) CreateWorkItem(ctx context.Context, input CreateWorkItemInput)
 		})
 		if err != nil {
 			return repository.WorkItem{}, fmt.Errorf("create work item: %w", err)
+		}
+		if isOtherAssignee(input.AssigneeID, input.ActorUserID) {
+			if _, err := notifications.CreateInTransaction(ctx, q, notifications.CreateInput{
+				RecipientUserID: input.AssigneeID,
+				WorkspaceID:     input.WorkspaceID,
+				EventType:       "task_assigned",
+				RelatedEntityID: item.ID,
+				Message:         fmt.Sprintf("You were assigned to task: %s.", item.Title),
+			}); err != nil {
+				return repository.WorkItem{}, fmt.Errorf("notify task assignee: %w", err)
+			}
 		}
 		if err := recordActivity(ctx, q, input.ActorUserID, input.WorkspaceID, "created", "work_item", item.ID, nil, item); err != nil {
 			return repository.WorkItem{}, err
@@ -443,7 +492,7 @@ func (s *Service) UpdateWorkItem(ctx context.Context, input UpdateWorkItemInput)
 		return repository.WorkItem{}, invalid("a work item cannot be its own parent")
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.WorkItem, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.WorkItem, error) {
 		previous, err := q.GetWorkItem(ctx, repository.GetWorkItemParams{ID: input.WorkItemID, WorkspaceID: input.WorkspaceID})
 		if err != nil {
 			return repository.WorkItem{}, notFound(err)
@@ -484,6 +533,17 @@ func (s *Service) UpdateWorkItem(ctx context.Context, input UpdateWorkItemInput)
 		if err != nil {
 			return repository.WorkItem{}, notFound(err)
 		}
+		if changedAssignee(previous.AssigneeID, input.AssigneeID) && isOtherAssignee(input.AssigneeID, input.ActorUserID) {
+			if _, err := notifications.CreateInTransaction(ctx, q, notifications.CreateInput{
+				RecipientUserID: input.AssigneeID,
+				WorkspaceID:     input.WorkspaceID,
+				EventType:       "task_assigned",
+				RelatedEntityID: updated.ID,
+				Message:         fmt.Sprintf("You were assigned to task: %s.", updated.Title),
+			}); err != nil {
+				return repository.WorkItem{}, fmt.Errorf("notify task assignee: %w", err)
+			}
+		}
 		if err := recordActivity(ctx, q, input.ActorUserID, input.WorkspaceID, "updated", "work_item", input.WorkItemID, previous, updated); err != nil {
 			return repository.WorkItem{}, err
 		}
@@ -495,7 +555,7 @@ func (s *Service) DeleteWorkItem(ctx context.Context, workspaceID, actorUserID, 
 	if !workspaceID.Valid || !actorUserID.Valid || !workItemID.Valid {
 		return invalid("workspace, actor, and work item IDs are required")
 	}
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		previous, err := q.GetWorkItem(ctx, repository.GetWorkItemParams{ID: workItemID, WorkspaceID: workspaceID})
 		if err != nil {
 			return struct{}{}, notFound(err)
@@ -531,7 +591,7 @@ func (s *Service) CreateLabel(ctx context.Context, input CreateLabelInput) (repo
 		return repository.Label{}, invalid("label color cannot exceed 30 characters")
 	}
 
-	return inTransaction(ctx, s.pool, func(q *repository.Queries) (repository.Label, error) {
+	return inWorkspaceTransaction(ctx, s.pool, input.WorkspaceID, input.ActorUserID, func(q *repository.Queries) (repository.Label, error) {
 		label, err := q.CreateLabel(ctx, repository.CreateLabelParams{
 			WorkspaceID: input.WorkspaceID,
 			Name:        input.Name,
@@ -565,7 +625,7 @@ func (s *Service) AddLabelToWorkItem(ctx context.Context, workspaceID, actorUser
 	if !workspaceID.Valid || !actorUserID.Valid || !workItemID.Valid || !labelID.Valid {
 		return invalid("workspace, actor, work item, and label IDs are required")
 	}
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		refs, err := q.CheckWorkItemLabelReferences(ctx, repository.CheckWorkItemLabelReferencesParams{
 			WorkspaceID: workspaceID,
 			WorkItemID:  workItemID,
@@ -592,7 +652,7 @@ func (s *Service) RemoveLabelFromWorkItem(ctx context.Context, workspaceID, acto
 	if !workspaceID.Valid || !actorUserID.Valid || !workItemID.Valid || !labelID.Valid {
 		return invalid("workspace, actor, work item, and label IDs are required")
 	}
-	_, err := inTransaction(ctx, s.pool, func(q *repository.Queries) (struct{}, error) {
+	_, err := inWorkspaceTransaction(ctx, s.pool, workspaceID, actorUserID, func(q *repository.Queries) (struct{}, error) {
 		link, err := q.RemoveWorkItemLabel(ctx, repository.RemoveWorkItemLabelParams{
 			WorkspaceID: workspaceID,
 			WorkItemID:  workItemID,
@@ -755,6 +815,21 @@ func inTransaction[T any](ctx context.Context, pool *pgxpool.Pool, operation fun
 	return result, nil
 }
 
+func inWorkspaceTransaction[T any](
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	workspaceID, actorID pgtype.UUID,
+	operation func(*repository.Queries) (T, error),
+) (T, error) {
+	var zero T
+	return inTransaction(ctx, pool, func(q *repository.Queries) (T, error) {
+		if err := activity.RequireWorkspaceWriter(ctx, q, workspaceID, actorID); err != nil {
+			return zero, err
+		}
+		return operation(q)
+	})
+}
+
 func marshalOptional(value any) ([]byte, error) {
 	if value == nil {
 		return nil, nil
@@ -765,6 +840,17 @@ func marshalOptional(value any) ([]byte, error) {
 func optionalText(value string) pgtype.Text {
 	value = strings.TrimSpace(value)
 	return pgtype.Text{String: value, Valid: value != ""}
+}
+
+func changedAssignee(previous, next pgtype.UUID) bool {
+	if previous.Valid != next.Valid {
+		return true
+	}
+	return previous.Valid && previous.Bytes != next.Bytes
+}
+
+func isOtherAssignee(assignee, actor pgtype.UUID) bool {
+	return assignee.Valid && (!actor.Valid || assignee.Bytes != actor.Bytes)
 }
 
 func defaultIfEmpty(value, fallback string) string {

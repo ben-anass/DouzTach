@@ -67,15 +67,15 @@ func RenderEmptyState(s styles.Styles, state EmptyState, width int) string {
 // PendingState is the standard "feature not connected" state. It is deliberately
 // explicit: no placeholder data is shown.
 func PendingState(s styles.Styles, feature, requirement string) EmptyState {
-	message := "This feature needs the backend API contract from Member 2 (nani)."
+	message := "This feature is not currently connected to live backend data."
 	if strings.TrimSpace(requirement) != "" {
 		message = requirement
 	}
 	return EmptyState{
 		Icon:    "◌",
-		Title:   feature + " is not connected yet",
+		Title:   feature + " is not available yet",
 		Message: message,
-		Hint:    "No sample data is shown because none was loaded from a backend.",
+		Hint:    "No sample data is shown because it was not loaded from a backend.",
 		Tone:    TonePending,
 	}
 }
