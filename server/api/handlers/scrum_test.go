@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-
-
 	"github.com/ben-anass/DouzTach/internal/auth"
 	"github.com/ben-anass/DouzTach/server/activity"
 )
@@ -17,14 +15,6 @@ func TestScrumHandlersRejectMalformedOptionalValues(t *testing.T) {
 	token, err := jwtService.GenerateToken("00000000-0000-0000-0000-000000000001")
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	func TestScrumReadOnlyRoleErrorMapsToForbidden(t *testing.T) {
-		response := httptest.NewRecorder()
-		writeScrumError(response, activity.ErrReadOnly)
-		if response.Code != http.StatusForbidden {
-			t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
-		}
 	}
 	handler := NewScrumHandler(nil)
 
@@ -67,4 +57,10 @@ func TestScrumHandlersRejectMalformedOptionalValues(t *testing.T) {
 	}
 }
 
-
+func TestScrumReadOnlyRoleErrorMapsToForbidden(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeScrumError(response, activity.ErrReadOnly)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+}
