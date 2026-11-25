@@ -151,6 +151,7 @@ type SprintService interface {
 	Update(ctx context.Context, workspaceID, sprintID string, req SprintMutationRequest) (*Sprint, error)
 	Start(ctx context.Context, workspaceID, sprintID string) (*Sprint, error)
 	Complete(ctx context.Context, workspaceID, sprintID string) (*Sprint, error)
+	Reopen(ctx context.Context, workspaceID, sprintID string) (*Sprint, error)
 }
 
 // NotificationService covers the notification inbox.
@@ -468,6 +469,10 @@ func (pendingSprints) Start(context.Context, string, string) (*Sprint, error) {
 
 func (pendingSprints) Complete(context.Context, string, string) (*Sprint, error) {
 	return nil, pendingError("complete sprint")
+}
+
+func (pendingSprints) Reopen(context.Context, string, string) (*Sprint, error) {
+	return nil, pendingError("reopen sprint")
 }
 
 type pendingNotifications struct{}

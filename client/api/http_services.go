@@ -761,6 +761,10 @@ func (s *httpSprintService) Complete(ctx context.Context, workspaceID, sprintID 
 	return s.transition(ctx, workspaceID, sprintID, "complete")
 }
 
+func (s *httpSprintService) Reopen(ctx context.Context, workspaceID, sprintID string) (*Sprint, error) {
+	return s.transition(ctx, workspaceID, sprintID, "reopen")
+}
+
 func (s *httpSprintService) transition(ctx context.Context, workspaceID, sprintID, action string) (*Sprint, error) {
 	path := fmt.Sprintf("/api/v1/workspaces/%s/sprints/%s/%s", workspaceID, sprintID, action)
 	var raw sprintResponse
