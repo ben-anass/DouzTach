@@ -25,6 +25,7 @@ func newSprintCommand(app *App) *cobra.Command {
 		newSprintUpdateCommand(app),
 		newSprintStartCommand(app),
 		newSprintCompleteCommand(app),
+		newSprintReopenCommand(app),
 		newSprintDeleteCommand(app),
 		newSprintBacklogCommand(app),
 		newSprintAddStoryCommand(app),

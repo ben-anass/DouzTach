@@ -656,6 +656,25 @@ func (h *ScrumHandler) CompleteSprint(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(sprint)
 }
 
+func (h *ScrumHandler) ReopenSprint(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	actorIDStr, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	workspaceID := parseUUID(chi.URLParam(r, "workspaceID"))
+	sprintID := parseUUID(chi.URLParam(r, "sprintID"))
+	actorID := parseUUID(actorIDStr)
+
+	sprint, err := h.scrumService.ReopenSprint(r.Context(), workspaceID, actorID, sprintID)
+	if err != nil {
+		writeScrumError(w, err)
+		return
+	}
+	json.NewEncoder(w).Encode(sprint)
+}
+
 func (h *ScrumHandler) DeleteSprint(w http.ResponseWriter, r *http.Request) {
 	actorIDStr, ok := auth.UserIDFromContext(r.Context())
 	if !ok {

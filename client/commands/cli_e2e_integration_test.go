@@ -212,6 +212,8 @@ func TestCLIRealWorkflowPostgresIntegration(t *testing.T) {
 	runFailure(ownerConfig, "sprint", "delete", sprintID, "--yes")
 	run(ownerConfig, "", "sprint", "complete", sprintID)
 	runFailure(ownerConfig, "sprint", "delete", sprintID, "--yes")
+	run(ownerConfig, "", "sprint", "reopen", sprintID)
+	run(ownerConfig, "", "sprint", "delete", sprintID, "--yes")
 
 	otherWorkspaceOutput := run(ownerConfig, "", "workspace", "create", "--name", "CLI Other "+suffix)
 	otherWorkspaceID := firstUUID(t, otherWorkspaceOutput, "second workspace")

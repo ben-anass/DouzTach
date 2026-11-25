@@ -90,6 +90,7 @@ func NewRouter(
 				r.With(scrumHandler.RequireWorkspaceMember).Delete("/workspaces/{workspaceID}/sprints/{sprintID}", scrumHandler.DeleteSprint)
 				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints/{sprintID}/start", scrumHandler.StartSprint)
 				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints/{sprintID}/complete", scrumHandler.CompleteSprint)
+				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints/{sprintID}/reopen", scrumHandler.ReopenSprint)
 				r.With(scrumHandler.RequireWorkspaceMember).Get("/workspaces/{workspaceID}/backlog", scrumHandler.ListBacklog)
 				r.With(scrumHandler.RequireWorkspaceMember).Patch("/workspaces/{workspaceID}/backlog/{storyID}/position", scrumHandler.SetBacklogStoryPosition)
 				r.With(scrumHandler.RequireWorkspaceMember).Post("/workspaces/{workspaceID}/sprints/{sprintID}/stories", scrumHandler.AddStoryToSprint)

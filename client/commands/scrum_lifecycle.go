@@ -357,6 +357,12 @@ func newSprintCompleteCommand(app *App) *cobra.Command {
 	})
 }
 
+func newSprintReopenCommand(app *App) *cobra.Command {
+	return sprintTransitionCommand(app, "reopen", "Reopen a completed sprint", func(ctx context.Context, ws, id string) (*api.Sprint, error) {
+		return app.Services.Sprints.Reopen(ctx, ws, id)
+	})
+}
+
 func sprintTransitionCommand(app *App, verb, short string, action func(context.Context, string, string) (*api.Sprint, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   verb + " <sprint-id>",
