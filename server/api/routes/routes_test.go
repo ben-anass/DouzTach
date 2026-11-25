@@ -33,6 +33,7 @@ func TestProtectedScrumRoutesRejectMissingAuth(t *testing.T) {
 		{http.MethodPost, "/api/v1/workspaces/00000000-0000-0000-0000-000000000001/tasks"},
 		{http.MethodPut, "/api/v1/workspaces/00000000-0000-0000-0000-000000000001/tasks/00000000-0000-0000-0000-000000000002"},
 		{http.MethodPost, "/api/v1/workspaces/00000000-0000-0000-0000-000000000001/sprints/00000000-0000-0000-0000-000000000002/start"},
+		{http.MethodPost, "/api/v1/workspaces/00000000-0000-0000-0000-000000000001/sprints/00000000-0000-0000-0000-000000000002/reopen"},
 		{http.MethodGet, "/api/v1/workspaces/00000000-0000-0000-0000-000000000001/activity"},
 		{http.MethodGet, "/api/v1/notifications"},
 		{http.MethodPost, "/api/v1/notifications/read-all"},

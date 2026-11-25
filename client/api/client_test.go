@@ -149,6 +149,9 @@ func TestHTTPServicesUseWorkspaceScopedRoutesAndBearerAuth(t *testing.T) {
 				t.Errorf("story_id = %q, want story-1", body["story_id"])
 			}
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/ws-1/sprints/sprint-1/reopen":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"sprint-1","name":"Sprint 1","status":"planned"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/notifications/read-all":
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -175,6 +178,13 @@ func TestHTTPServicesUseWorkspaceScopedRoutesAndBearerAuth(t *testing.T) {
 	}
 	if err := services.Sprints.AddStory(context.Background(), "ws-1", "sprint-1", "story-1"); err != nil {
 		t.Fatalf("add story through HTTP adapter: %v", err)
+	}
+	sprint, err := services.Sprints.Reopen(context.Background(), "ws-1", "sprint-1")
+	if err != nil {
+		t.Fatalf("reopen sprint through HTTP adapter: %v", err)
+	}
+	if sprint.Status != SprintStatusPlanned {
+		t.Fatalf("reopened sprint status = %q, want %q", sprint.Status, SprintStatusPlanned)
 	}
 	if err := services.Notifications.MarkAllRead(context.Background()); err != nil {
 		t.Fatalf("mark all notifications read through HTTP adapter: %v", err)

@@ -117,6 +117,7 @@ func TestSubcommandHelpIsAvailable(t *testing.T) {
 		{"task", "--help"},
 		{"workspace", "--help"},
 		{"settings", "--help"},
+		{"sprint", "--help"},
 		{"notifications", "--help"},
 		{"chat", "--help"},
 	} {
@@ -126,6 +127,9 @@ func TestSubcommandHelpIsAvailable(t *testing.T) {
 		}
 		if !strings.Contains(out, "Usage:") {
 			t.Errorf("%v produced no usage section:\n%s", args, out)
+		}
+		if args[0] == "sprint" && !strings.Contains(out, "reopen") {
+			t.Errorf("sprint help does not list reopen:\n%s", out)
 		}
 	}
 }
