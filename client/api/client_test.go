@@ -47,6 +47,18 @@ func TestNewClientValidation(t *testing.T) {
 	}
 }
 
+func TestTaskFilterUsesUserStoryRelationship(t *testing.T) {
+	filter := TaskFilter{UserStoryID: "story-1"}
+	task := Task{ID: "task-1", UserStoryID: "story-1"}
+	if !filter.Matches(task) {
+		t.Fatal("task linked to the requested story should match")
+	}
+	task.UserStoryID = "story-2"
+	if filter.Matches(task) {
+		t.Fatal("task linked to another story should not match")
+	}
+}
+
 func TestClientGetWithAuthAndQuery(t *testing.T) {
 	t.Parallel()
 	var gotPath, gotQuery, gotAuth, gotAgent string
@@ -152,6 +164,20 @@ func TestHTTPServicesUseWorkspaceScopedRoutesAndBearerAuth(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/ws-1/sprints/sprint-1/reopen":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"id":"sprint-1","name":"Sprint 1","status":"planned"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/workspaces/ws-1/tasks":
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode task request: %v", err)
+			}
+			if body["user_story_id"] != "story-1" {
+				t.Errorf("task user_story_id = %v, want story-1", body["user_story_id"])
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"task-1"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/workspaces/ws-1/tasks/task-1":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"task-1","workspace_id":"ws-1","user_story_id":"story-1","title":"Implement flow","item_type":"task","status":"to_do","priority":"medium"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/notifications/read-all":
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -185,6 +211,19 @@ func TestHTTPServicesUseWorkspaceScopedRoutesAndBearerAuth(t *testing.T) {
 	}
 	if sprint.Status != SprintStatusPlanned {
 		t.Fatalf("reopened sprint status = %q, want %q", sprint.Status, SprintStatusPlanned)
+	}
+	task, err := services.Tasks.Create(context.Background(), CreateTaskRequest{
+		WorkspaceID: "ws-1",
+		Title:       "Implement flow",
+		Type:        TaskTypeTask,
+		Priority:    PriorityMedium,
+		UserStoryID: "story-1",
+	})
+	if err != nil {
+		t.Fatalf("create task through HTTP adapter: %v", err)
+	}
+	if task.UserStoryID != "story-1" {
+		t.Fatalf("task user story ID = %q, want story-1", task.UserStoryID)
 	}
 	if err := services.Notifications.MarkAllRead(context.Background()); err != nil {
 		t.Fatalf("mark all notifications read through HTTP adapter: %v", err)
