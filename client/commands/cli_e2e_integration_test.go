@@ -142,11 +142,15 @@ func TestCLIRealWorkflowPostgresIntegration(t *testing.T) {
 	backlogOutput := run(ownerConfig, "", "sprint", "backlog")
 	requireOrderedOutput(t, backlogOutput, "CLI Story Updated "+suffix, "CLI Story Two "+suffix)
 
-	taskOutput := run(ownerConfig, "", "task", "create", "--title", "CLI Task "+suffix, "--assignee", memberID, "--points", "2")
+	taskOutput := run(ownerConfig, "", "task", "create", "--title", "CLI Task "+suffix, "--story", storyID, "--assignee", memberID, "--points", "2")
 	requireOutput(t, taskOutput, "CLI Task "+suffix)
 	var taskID string
-	if err := pool.QueryRow(ctx, "SELECT id::text FROM work_items WHERE workspace_id = $1 AND title = $2", workspaceID, "CLI Task "+suffix).Scan(&taskID); err != nil {
+	var persistedStoryID string
+	if err := pool.QueryRow(ctx, "SELECT id::text, user_story_id::text FROM work_items WHERE workspace_id = $1 AND title = $2", workspaceID, "CLI Task "+suffix).Scan(&taskID, &persistedStoryID); err != nil {
 		t.Fatalf("find persisted CLI-created task: %v", err)
+	}
+	if persistedStoryID != storyID {
+		t.Fatalf("persisted task story ID = %q, want %q", persistedStoryID, storyID)
 	}
 	run(ownerConfig, "", "task", "show", taskID)
 	run(ownerConfig, "", "task", "update", taskID, "--status", "IN_PROGRESS")
@@ -227,6 +231,8 @@ func TestCLIRealWorkflowPostgresIntegration(t *testing.T) {
 		t.Fatalf("cross-workspace sprint-story membership was persisted: %d", sprintMembershipCount)
 	}
 	run(ownerConfig, "", "workspace", "switch", workspaceID)
+	runFailure(ownerConfig, "story", "delete", storyID, "--yes")
+	run(ownerConfig, "", "task", "delete", taskID, "--yes")
 	run(ownerConfig, "", "story", "delete", storyID, "--yes")
 	run(ownerConfig, "", "story", "delete", secondStoryID, "--yes")
 	run(ownerConfig, "", "epic", "delete", epicID, "--yes")
