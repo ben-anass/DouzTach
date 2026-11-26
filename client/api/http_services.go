@@ -223,6 +223,7 @@ func (s *httpTaskService) List(ctx context.Context, filter TaskFilter) ([]Task, 
 		ID          string     `json:"id"`
 		Title       string     `json:"title"`
 		Description string     `json:"description"`
+		UserStoryID *string    `json:"user_story_id"`
 		ItemType    string     `json:"item_type"`
 		Status      string     `json:"status"`
 		Priority    string     `json:"priority"`
@@ -244,6 +245,7 @@ func (s *httpTaskService) List(ctx context.Context, filter TaskFilter) ([]Task, 
 			Title:       item.Title,
 			Description: item.Description,
 			WorkspaceID: filter.WorkspaceID,
+			UserStoryID: stringValue(item.UserStoryID),
 			Type:        TaskTypeTask,
 			Status:      TaskStatusTodo,
 			Priority:    PriorityMedium,
@@ -283,6 +285,9 @@ func (s *httpTaskService) Create(ctx context.Context, req CreateTaskRequest) (*T
 	if req.SprintID != "" {
 		body["sprint_id"] = req.SprintID
 	}
+	if req.UserStoryID != "" {
+		body["user_story_id"] = req.UserStoryID
+	}
 	if req.DueDate != nil {
 		body["due_date"] = req.DueDate.Format("2006-01-02")
 	}
@@ -308,6 +313,7 @@ func (s *httpTaskService) Get(ctx context.Context, workspaceID, taskID string) (
 	var raw struct {
 		ID          string     `json:"id"`
 		WorkspaceID string     `json:"workspace_id"`
+		UserStoryID *string    `json:"user_story_id"`
 		Title       string     `json:"title"`
 		Description *string    `json:"description"`
 		ItemType    string     `json:"item_type"`
@@ -328,6 +334,7 @@ func (s *httpTaskService) Get(ctx context.Context, workspaceID, taskID string) (
 		ID:          raw.ID,
 		Key:         taskKey(raw.ID),
 		WorkspaceID: workspaceID,
+		UserStoryID: stringValue(raw.UserStoryID),
 		Title:       raw.Title,
 		Type:        TaskType(strings.ToUpper(raw.ItemType)),
 		Status:      parseBackendTaskStatus(raw.Status),
@@ -370,6 +377,9 @@ func (s *httpTaskService) Update(ctx context.Context, workspaceID, taskID string
 	if current.SprintID != "" {
 		body["sprint_id"] = current.SprintID
 	}
+	if current.UserStoryID != "" {
+		body["user_story_id"] = current.UserStoryID
+	}
 	if current.DueDate != nil {
 		body["due_date"] = current.DueDate.Format("2006-01-02")
 	}
@@ -393,6 +403,9 @@ func (s *httpTaskService) Update(ctx context.Context, workspaceID, taskID string
 	}
 	if req.SprintID != nil {
 		body["sprint_id"] = *req.SprintID
+	}
+	if req.UserStoryID != nil {
+		body["user_story_id"] = *req.UserStoryID
 	}
 	if req.DueDate != nil {
 		body["due_date"] = req.DueDate.Format("2006-01-02")

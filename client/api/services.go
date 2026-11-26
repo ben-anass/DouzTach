@@ -73,7 +73,7 @@ type CreateTaskRequest struct {
 	Priority    Priority
 	AssigneeID  string
 	SprintID    string
-	EpicID      string
+	UserStoryID string
 	DueDate     *time.Time
 	StoryPoints *int
 }
@@ -87,7 +87,7 @@ type UpdateTaskRequest struct {
 	Priority    *Priority
 	AssigneeID  *string
 	SprintID    *string
-	EpicID      *string
+	UserStoryID *string
 	DueDate     *time.Time
 	StoryPoints *int
 }

@@ -230,7 +230,7 @@ type Task struct {
 	Description string
 	WorkspaceID string
 	SprintID    string
-	EpicID      string
+	UserStoryID string
 	Type        TaskType
 	Status      TaskStatus
 	Priority    Priority
@@ -426,7 +426,7 @@ func CountTasks(tasks []Task, now time.Time) TaskCounts {
 type TaskFilter struct {
 	WorkspaceID   string
 	SprintID      string
-	EpicID        string
+	UserStoryID   string
 	AssigneeID    string
 	Status        *TaskStatus
 	Type          *TaskType
@@ -446,7 +446,7 @@ func (f TaskFilter) Matches(task Task) bool {
 	if f.SprintID != "" && task.SprintID != f.SprintID {
 		return false
 	}
-	if f.EpicID != "" && task.EpicID != f.EpicID {
+	if f.UserStoryID != "" && task.UserStoryID != f.UserStoryID {
 		return false
 	}
 	if f.BacklogOnly && task.SprintID != "" {
