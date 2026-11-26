@@ -7,15 +7,23 @@
 > and must not be used to infer current behavior. End-to-end verification still
 > depends on an isolated PostgreSQL test environment.
 
+## Current Scrum relationship
+
+The supported planning chain is **Epic → User Story → Work Item**. A work item
+links to a user story through `user_story_id`; it has no direct `epic_id`.
+The CLI associates tasks with stories using `task create --story` and
+`task update --story`.
+
 **Historical status:** blocking the terminal client.
 **Owner of the backend:** Member 2 (nani) — auth, users, workspaces, members, invitations, permissions.
 **Owner of data modules:** Member 3 (med) — tasks, epics, scrum, chat, notifications, activity.
 
-The terminal client (`client/`) is complete: commands, prompts, tables, dashboard,
-and the HTTP transport are implemented. What is missing is the **contract
-itself** — the endpoint paths, payload schemas, and response envelopes. The
-client deliberately refuses to guess them (`api.ErrContractPending`), so every
-data command currently fails with:
+At the time this request was written, the terminal client (`client/`) was
+considered complete: commands, prompts, tables, dashboard, and the HTTP
+transport were implemented. What was missing was the **contract itself** — the
+endpoint paths, payload schemas, and response envelopes. The client deliberately
+refused to guess them (`api.ErrContractPending`), so every data command then
+failed with:
 
 ```
 Workspaces is not connected yet: backend API contract is not available yet (waiting for nani)
