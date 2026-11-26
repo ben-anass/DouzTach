@@ -432,6 +432,13 @@ func taskKey(id string) string {
 	return id
 }
 
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 func backendTaskStatus(status TaskStatus) string {
 	switch status {
 	case TaskStatusTodo:

@@ -42,7 +42,7 @@ func newTaskListCommand(app *App) *cobra.Command {
 		typeFilter     string
 		search         string
 		sprintID       string
-		epicID         string
+		storyID        string
 		assigneeID     string
 		mine           bool
 		backlog        bool
@@ -63,7 +63,7 @@ func newTaskListCommand(app *App) *cobra.Command {
 			filter := api.TaskFilter{
 				WorkspaceID: workspaceID,
 				SprintID:    strings.TrimSpace(sprintID),
-				EpicID:      strings.TrimSpace(epicID),
+				UserStoryID: strings.TrimSpace(storyID),
 				AssigneeID:  strings.TrimSpace(assigneeID),
 				Search:      strings.TrimSpace(search),
 				BacklogOnly: backlog,
@@ -95,8 +95,8 @@ func newTaskListCommand(app *App) *cobra.Command {
 					return err
 				}
 			}
-			if filter.EpicID != "" {
-				if err := validation.ID("epic ID", filter.EpicID); err != nil {
+			if filter.UserStoryID != "" {
+				if err := validation.ID("user story ID", filter.UserStoryID); err != nil {
 					return err
 				}
 			}
@@ -142,7 +142,7 @@ func newTaskListCommand(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&typeFilter, "type", "", "filter by TASK, BUG, STORY, EPIC, or SUBTASK")
 	cmd.Flags().StringVar(&search, "search", "", "search keys, titles, and descriptions")
 	cmd.Flags().StringVar(&sprintID, "sprint", "", "filter by sprint ID")
-	cmd.Flags().StringVar(&epicID, "epic", "", "filter by epic ID")
+	cmd.Flags().StringVar(&storyID, "story", "", "filter by user story ID")
 	cmd.Flags().StringVar(&assigneeID, "assignee", "", "filter by assignee ID")
 	cmd.Flags().BoolVar(&mine, "mine", false, "only tasks assigned to you")
 	cmd.Flags().BoolVar(&backlog, "backlog", false, "only tasks without a sprint")
@@ -157,7 +157,7 @@ func newTaskCreateCommand(app *App) *cobra.Command {
 		priority    string
 		assigneeID  string
 		sprintID    string
-		epicID      string
+		storyID     string
 		due         string
 		points      string
 	)
@@ -229,7 +229,7 @@ func newTaskCreateCommand(app *App) *cobra.Command {
 			if err := validateOptionalID("sprint ID", sprintID); err != nil {
 				return err
 			}
-			if err := validateOptionalID("epic ID", epicID); err != nil {
+			if err := validateOptionalID("user story ID", storyID); err != nil {
 				return err
 			}
 
@@ -243,7 +243,7 @@ func newTaskCreateCommand(app *App) *cobra.Command {
 				Priority:    priorityValue,
 				AssigneeID:  strings.TrimSpace(assigneeID),
 				SprintID:    strings.TrimSpace(sprintID),
-				EpicID:      strings.TrimSpace(epicID),
+				UserStoryID: strings.TrimSpace(storyID),
 				DueDate:     dueDate,
 				StoryPoints: storyPoints,
 			})
@@ -263,7 +263,7 @@ func newTaskCreateCommand(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&priority, "priority", string(api.PriorityMedium), "LOW, MEDIUM, HIGH, or URGENT")
 	cmd.Flags().StringVar(&assigneeID, "assignee", "", "assignee user ID")
 	cmd.Flags().StringVar(&sprintID, "sprint", "", "sprint ID")
-	cmd.Flags().StringVar(&epicID, "epic", "", "epic ID")
+	cmd.Flags().StringVar(&storyID, "story", "", "user story ID")
 	cmd.Flags().StringVar(&due, "due", "", "due date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&points, "points", "", "story points (0-100)")
 	return cmd
@@ -309,7 +309,7 @@ func newTaskUpdateCommand(app *App) *cobra.Command {
 		priority    string
 		assigneeID  string
 		sprintID    string
-		epicID      string
+		storyID     string
 		due         string
 		points      string
 	)
@@ -344,7 +344,7 @@ func newTaskUpdateCommand(app *App) *cobra.Command {
 				"due_date":    cmd.Flags().Changed("due"),
 				"assignee":    cmd.Flags().Changed("assignee"),
 				"sprint":      cmd.Flags().Changed("sprint"),
-				"epic":        cmd.Flags().Changed("epic"),
+				"story":       cmd.Flags().Changed("story"),
 				"points":      cmd.Flags().Changed("points"),
 			}
 			anyChange := false
@@ -430,12 +430,12 @@ func newTaskUpdateCommand(app *App) *cobra.Command {
 				value := strings.TrimSpace(sprintID)
 				request.SprintID = &value
 			}
-			if changed["epic"] {
-				if err := validateOptionalID("epic ID", epicID); err != nil {
+			if changed["story"] {
+				if err := validateOptionalID("user story ID", storyID); err != nil {
 					return err
 				}
-				value := strings.TrimSpace(epicID)
-				request.EpicID = &value
+				value := strings.TrimSpace(storyID)
+				request.UserStoryID = &value
 			}
 			if changed["points"] {
 				value, err := parseStoryPointsValue(points)
@@ -464,7 +464,7 @@ func newTaskUpdateCommand(app *App) *cobra.Command {
 	cmd.Flags().StringVar(&priority, "priority", "", "new priority: LOW, MEDIUM, HIGH, or URGENT")
 	cmd.Flags().StringVar(&assigneeID, "assignee", "", "new assignee ID (empty clears the assignee)")
 	cmd.Flags().StringVar(&sprintID, "sprint", "", "new sprint ID (empty clears the sprint)")
-	cmd.Flags().StringVar(&epicID, "epic", "", "new epic ID (empty clears the epic)")
+	cmd.Flags().StringVar(&storyID, "story", "", "new user story ID (empty clears the story)")
 	cmd.Flags().StringVar(&due, "due", "", "new due date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&points, "points", "", "new story points (0-100)")
 	return cmd
