@@ -293,7 +293,7 @@ func (a *App) switchWorkspace() tea.Cmd {
 
 func (a *App) refresh() (tea.Model, tea.Cmd) {
 	if !a.Services.Ready() {
-		a.setMessage("The backend contract is still pending; there is nothing to refresh.", true)
+		a.setMessage("The backend is not configured or available; there is nothing to refresh.", true)
 		return a, nil
 	}
 	a.Loading = true

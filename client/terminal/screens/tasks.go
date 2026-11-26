@@ -186,8 +186,8 @@ func TaskDetail(c Context, task api.Task) string {
 	if task.SprintID != "" {
 		b.WriteString(detailRow(c, "Sprint ID", c.Styles.Muted.Render(task.SprintID)))
 	}
-	if task.EpicID != "" {
-		b.WriteString(detailRow(c, "Epic ID", c.Styles.Muted.Render(task.EpicID)))
+	if task.UserStoryID != "" {
+		b.WriteString(detailRow(c, "User story ID", c.Styles.Muted.Render(task.UserStoryID)))
 	}
 	if task.Description != "" {
 		b.WriteString("\n")
